@@ -286,10 +286,12 @@ const T={
  cmPublic:{ko:'코멘트는 학교·봉사팀 보기에서 남길 수 있습니다.',en:'Comments can be added in the School & team view.'},
  goOnly:{ko:'조심·가지 말 곳만',en:'Caution spots only'},
  lgCare:{ko:'조심',en:'Care'}, lgNo:{ko:'가지 마세요',en:'Do not go'},
- savedDb:{ko:'공유 데이터베이스에 저장됨',en:'Saved to the shared database'}, dbOff:{ko:'데이터베이스 연결 안 됨 · 이 브라우저에만 저장',en:'Database not reachable · saved in this browser only'},
- dbDirty:{ko:'데이터베이스에 보내지 못한 변경이 있음 · 이 브라우저에만 저장됨',en:'Some changes did not reach the database · saved in this browser only'},
+ savedDb:{ko:'공유 데이터베이스에 저장됨',en:'Saved to the shared database'}, dbOff:{ko:'데이터베이스 연결 안 됨',en:'Database not reachable'},
+ qWait:{ko:'올리지 못한 변경 {n}건 · 연결되면 자동으로 올라감',en:'{n} change(s) waiting · will upload when connected'},
+ qToast:{ko:'지금은 연결이 안 됩니다. 이 기기에 저장해 두었다가 연결되면 자동으로 올립니다.',en:'No connection right now. Saved on this device and will upload automatically when connected.'},
+ qReject:{ko:'데이터베이스가 변경 하나를 받아들이지 않아 올리지 못했습니다.',en:'The database refused one change, so it was not uploaded.'},
  reset:{ko:'브라우저 저장분 지우기',en:'Clear browser copy'},
- resetQ:{ko:'이 브라우저에만 저장된 내용을 지우고 데이터베이스(연결이 안 되면 처음 예시)에서 다시 불러올까요?',en:'Delete what is saved only in this browser and reload from the database (or the original examples if it cannot be reached)?'},
+ resetQ:{ko:'아직 올리지 못한 변경을 포함해 이 브라우저에 저장된 내용을 지우고 데이터베이스에서 다시 불러올까요?',en:'Delete what is saved in this browser, including changes not yet uploaded, and reload from the database?'},
  myLoc:{ko:'내 위치',en:'My location'}, here:{ko:'내 위치에 기록',en:'Use my location'},
  locDenied:{ko:'위치 권한이 꺼져 있습니다. 브라우저 설정에서 이 페이지의 위치 사용을 허용해 주세요.',en:'Location permission is off. Allow location for this page in the browser settings.'},
  locFail:{ko:'지금 위치를 찾지 못했습니다. 하늘이 보이는 곳에서 다시 눌러 주세요.',en:'Could not find your location. Try again somewhere with open sky.'},
@@ -405,11 +407,42 @@ DATA.forEach(p=>{p.cm=SEED_CM[p.id]||[];});
    A copy is also kept in this browser so the page still opens when the database cannot be reached. ---------- */
 const DB={url:'https://scuwapqopssndoyjrzze.supabase.co/rest/v1',files:'https://scuwapqopssndoyjrzze.supabase.co/storage/v1/object',key:'sb_publishable__zJmaGtsgJhy8raEbPZfHQ_wOsz75AI'};
 const KEY='village-problem-map-cache-v2';
-let dbOn=false,dirty=false; /* dirty = a change could not be sent to the database */
-const norm=p=>{p.cm=p.cm||[];p.hist=p.hist||[];p.recs=p.recs||[];return p;};
-try{const s=JSON.parse(localStorage.getItem(KEY));if(s&&Array.isArray(s.data)&&s.data.length){DATA=s.data;dirty=!!s.dirty;}}catch(_){}
-DATA.forEach(norm);
-function save(){try{localStorage.setItem(KEY,JSON.stringify({data:DATA,dirty}));}catch(_){}}
+let dbOn=false,stuck=false; /* stuck = the last attempt to send a change failed (no connection) */
+let Q=[]; /* changes not yet in the database, oldest first. Kept in this browser and sent again when the connection returns. */
+const localDate=()=>{const d=new Date(),z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate());};
+/* Anyone can write to the database, so nothing read from it is trusted: every value is checked before it reaches the screen. */
+const isDate=v=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(v);
+const txt=o=>{
+  if(typeof o==='string')return o.slice(0,600);
+  if(!o||typeof o!=='object')return '';
+  const n={};for(const k of ['ko','en'])if(typeof o[k]==='string'&&o[k])n[k]=o[k].slice(0,600);
+  return Object.keys(n).length?n:'';
+};
+const pick=(v,table,dflt)=>typeof v==='string'&&Object.prototype.hasOwnProperty.call(table,v)?v:dflt;
+const arr=v=>Array.isArray(v)?v:[];
+function clean(r){
+  if(!r||typeof r!=='object'||!Number.isInteger(r.id))return null;
+  const lat=Number(r.lat),lng=Number(r.lng);
+  if(typeof r.lat!=='number'||typeof r.lng!=='number'||!(Math.abs(lat)<=90)||!(Math.abs(lng)<=180))return null;
+  const p={id:r.id,cat:pick(r.cat,CATS,'fac'),lat,lng,date:isDate(r.date)?r.date:'',who:pick(r.who,WHO,'student'),st:pick(r.st,ST,'rec'),pub:r.pub===true,
+    title:txt(r.title),desc:txt(r.desc),since:txt(r.since),aff:txt(r.aff),
+    hist:arr(r.hist).filter(h=>h&&typeof h==='object').map(h=>({d:isDate(h.d)?h.d:'',s:pick(h.s,ST,'rec'),m:txt(h.m)})),
+    recs:arr(r.recs).filter(x=>x&&(x.k==='measure'||x.k==='repair')).map(x=>({k:x.k,t:txt(x.t)})),
+    cm:arr(r.cm).filter(c=>c&&typeof c==='object'&&pick(c.k,CK,null)&&(c.k!=='go'||pick(c.go,CG,null))).map(c=>{
+      const n={d:isDate(c.d)?c.d:'',who:pick(c.who,WHO,'student'),k:c.k,m:txt(c.m)};if(c.k==='go')n.go=c.go;return n;})};
+  const ph=arr(r.photos).filter(x=>x&&typeof x.u==='string'&&x.u.startsWith(DB.files+'/public/photos/')&&!/["'<>\s]/.test(x.u)).map(x=>({u:x.u,d:isDate(x.d)?x.d:''}));
+  if(ph.length)p.photos=ph;
+  return p;
+}
+try{
+  const s=JSON.parse(localStorage.getItem(KEY));
+  if(s&&Array.isArray(s.data)&&s.data.length){
+    const d=s.data.map(clean).filter(Boolean);if(d.length)DATA=d;
+    if(Array.isArray(s.q))Q=s.q.filter(o=>o&&['new','patch','cm','del'].includes(o.t)&&Number.isInteger(o.id));
+  }
+}catch(_){}
+DATA.forEach(p=>{p.cm=p.cm||[];});
+function save(){try{localStorage.setItem(KEY,JSON.stringify({data:DATA,q:Q}));}catch(_){}}
 const strip=p=>{const o={...p};delete o.id;delete o.cm;return o;};
 async function api(path,opt={}){
   const r=await fetch(DB.url+path,{...opt,headers:{apikey:DB.key,'Content-Type':'application/json',...(opt.headers||{})}});
@@ -418,8 +451,10 @@ async function api(path,opt={}){
 }
 async function pull(){
   const [ps,cs]=await Promise.all([api('/problems?select=id,data&order=id'),api('/comments?select=problem_id,data&order=id')]);
-  const by={},rows=ps.filter(r=>!r.data.del).map(r=>by[r.id]=norm({...r.data,id:r.id,cm:[]}));
-  cs.forEach(c=>{if(by[c.problem_id])by[c.problem_id].cm.push(c.data);});
+  const by={};
+  arr(ps).forEach(r=>{if(r&&r.data&&typeof r.data==='object'&&!r.data.del)by[r.id]={...r.data,id:r.id,cm:[]};});
+  arr(cs).forEach(c=>{if(c&&by[c.problem_id])by[c.problem_id].cm.push(c.data);});
+  const rows=Object.values(by).map(clean).filter(Boolean).sort((a,b)=>a.id-b.id);
   return rows;
 }
 const patch=p=>api('/problems?id=eq.'+p.id,{method:'PATCH',body:JSON.stringify({data:strip(p),updated_at:new Date().toISOString()})});
@@ -438,15 +473,47 @@ async function upload(blob){
 const photosOf=p=>(p.photos||[]).filter(x=>x&&typeof x.u==='string'&&x.u.startsWith(DB.files+'/public/photos/'));
 function redraw(){const y=$('panel-body').scrollTop;render();$('panel-body').scrollTop=y;}
 /* send one change; if it fails, keep it in this browser and stop overwriting local data with database data */
-let sig='',ver=0,pending=0,pulling=false; /* ver counts local changes, so a slow download never overwrites a newer local change */
-function send(job){ver++;pending++;job.then(()=>{dbOn=true;},()=>{dirty=true;}).then(()=>{pending--;save();drawChrome();drawSheet();});}
+let sig='',ver=0,pulling=false,flushing=false; /* ver counts local changes, so a slow download never overwrites a newer local change */
+/* Every change goes through the queue. It is sent at once; if there is no connection it waits here and is retried every few seconds. */
+function enq(op){
+  if(op.t==='patch'&&Q.some((o,i)=>o.t==='patch'&&o.id===op.id&&(i>0||!flushing))){save();return;}
+  Q.push(op);ver++;save();flush();
+}
+function reid(old,id){
+  const p=DATA.find(x=>x.id===old);if(p)p.id=id;
+  Q.forEach(o=>{if(o.id===old)o.id=id;});
+  if(S.sel===old)S.sel=id;if(S.editId===old)S.editId=id;
+}
+async function flush(){
+  if(flushing||!Q.length)return;
+  flushing=true;let renamed=false;
+  while(Q.length){
+    const o=Q[0],p=DATA.find(x=>x.id===o.id),now=new Date().toISOString();
+    try{
+      if(o.t==='new'){const r=await api('/problems',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({data:p?strip(p):o.row})});reid(o.id,r[0].id);renamed=true;}
+      else if(o.t==='patch'){if(p&&p.id>0)await patch(p);}
+      else if(o.t==='cm'){if(o.id>0)await api('/comments',{method:'POST',body:JSON.stringify({problem_id:o.id,data:o.c})});}
+      else if(o.t==='del'){if(o.id>0)await api('/problems?id=eq.'+o.id,{method:'PATCH',body:JSON.stringify({data:o.data,updated_at:now})});}
+      Q.shift();ver++;save();dbOn=true;stuck=false;
+    }catch(e){
+      /* the database refused this change (not a connection problem): it can never succeed, so drop it and go on */
+      if(/^db 4/.test(e.message)&&!/^db (401|403|408|429)/.test(e.message)){Q.shift();ver++;save();toast(t('qReject'));continue;}
+      if(!stuck)toast(t('qToast'));
+      stuck=true;break;
+    }
+  }
+  flushing=false;
+  const a=document.activeElement,typing=a&&$('panel').contains(a)&&/INPUT|TEXTAREA|SELECT/.test(a.tagName);
+  if(renamed&&S.mode==='idle'&&!typing)redraw();else{drawChrome();if(renamed)drawPins();drawSheet();}
+}
 /* Checks the database every few seconds. The screen is redrawn only when something actually changed. */
 async function refresh(){
-  if(dirty||pending||pulling||document.hidden)return;
+  if(Q.length){flush();return;}
+  if(flushing||pulling||document.hidden)return;
   pulling=true;const v=ver;let rows;
   try{rows=await pull();}catch(_){pulling=false;if(dbOn){dbOn=false;drawChrome();}return;}
   pulling=false;
-  if(v!==ver||pending)return;
+  if(v!==ver||Q.length)return;
   const was=dbOn,n=JSON.stringify(rows);dbOn=true;
   if(n===sig){if(!was)drawChrome();return;}
   sig=n;DATA=rows;save();
@@ -468,7 +535,7 @@ const untr=o=>!!o&&typeof o==='object'&&!o[S.lang]&&!!(o.ko||o.en);
 const both=o=>o==null?'':(typeof o==='string'?o:(o.ko||'')+' '+(o.en||''));
 const one=v=>v?{[S.lang]:v}:'';
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const pad=n=>String(n).padStart(3,'0');
+const pad=n=>n<0?'—':String(n).padStart(3,'0'); /* a negative number is a temporary one, used until the database gives the real number */
 const isOpen=p=>p.st!=='done';
 const visible=()=>DATA.filter(p=>(S.role==='school'||p.pub)&&S.cats.has(p.cat)&&(!S.openOnly||isOpen(p))&&(!S.goOnly||flagged(p)));
 
@@ -657,7 +724,7 @@ function drawSheet(){
   $('scrim').hidden=!S.list;if(!S.list)return;
   const v=visible(),n=v.length,done=v.filter(p=>p.st==='done').length,pct=n?Math.round(done/n*100):0;
   const max=Math.max(1,...Object.keys(CATS).map(k=>v.filter(p=>p.cat===k).length));
-  $('sheet-h').textContent=t('list');$('sheet-close').textContent=t('close');$('sheet-reset').textContent=t('reset');$('sheet-reset').hidden=dbOn&&!dirty;
+  $('sheet-h').textContent=t('list');$('sheet-close').textContent=t('close');$('sheet-reset').textContent=t('reset');$('sheet-reset').hidden=dbOn&&!(Q.length&&stuck);
   $('stats').innerHTML=`
    <div class="stat"><h3>${t('rate')}</h3><div class="big num"><div><b>${pct}%</b><span>${done} / ${n} ${t('solved')}</span></div><div><b>${n}</b><span>${t('total')}</span></div></div>
     <div class="meter" role="img" aria-label="${pct}%"><i style="width:${pct}%"></i></div></div>
@@ -690,7 +757,8 @@ function drawChrome(){
   $('locate').setAttribute('aria-label',t('myLoc'));$('locate').title=t('myLoc');
   $('panel-close').setAttribute('aria-label',t('close'));
   $('layer').className='layerbtn '+(S.sat?'road':'sat');$('layer-l').textContent=S.sat?t('road'):t('sat');
-  $('notice').textContent=(S.role==='school'?t('nSchool'):t('nPublic'))+' · '+(dirty?t('dbDirty'):dbOn?t('savedDb'):t('dbOff'));
+  /* save status comes first: on a narrow screen the end of this line is cut off */
+  $('notice').textContent=(Q.length&&stuck?t('qWait').replace('{n}',Q.length):dbOn?t('savedDb'):t('dbOff'))+' · '+(S.role==='school'?t('nSchool'):t('nPublic'));
   $('chips').innerHTML=Object.keys(CATS).map(k=>`<button type="button" class="chip" data-cat="${k}" aria-pressed="${S.cats.has(k)}" style="--c:${CATS[k].c}"><i></i>${esc(L_(CATS[k]))}</button>`).join('')
     +`<button type="button" class="chip t" id="open-only" aria-pressed="${S.openOnly}">${t('openOnly')}</button>`
     +`<button type="button" class="chip t" id="go-only" aria-pressed="${S.goOnly}">${t('goOnly')}</button>`;
@@ -743,8 +811,8 @@ $('panel-body').addEventListener('click',e=>{
   const p=DATA.find(x=>x.id===S.sel);
   if(a.dataset.act==='cancel'){if(S.editId!=null)select(S.editId);else closePanel();return;}
   if(a.dataset.act==='editrec'&&p){S.editId=p.id;S.draft={lat:p.lat,lng:p.lng,cat:p.cat};S.mode='form';render();return;}
-  if(a.dataset.act==='del'&&p){if(!confirm(t('delQ')))return;p.del=true;send(patch(p));DATA=DATA.filter(x=>x!==p);save();closePanel();return;}
-  if(a.dataset.act==='rmphoto'&&p){p.photos=(p.photos||[]).filter(x=>x.u!==a.dataset.u);save();send(patch(p));redraw();return;}
+  if(a.dataset.act==='del'&&p){if(!confirm(t('delQ')))return;DATA=DATA.filter(x=>x!==p);enq({t:'del',id:p.id,data:{...strip(p),del:true}});closePanel();return;}
+  if(a.dataset.act==='rmphoto'&&p){p.photos=(p.photos||[]).filter(x=>x.u!==a.dataset.u);enq({t:'patch',id:p.id});redraw();return;}
   if(a.dataset.act==='zoom'&&p)reveal(p,19);
   if(a.dataset.act==='cm'){$('cm-sec').scrollIntoView({behavior:'smooth'});const f=$('c-m');if(f)f.focus({preventScroll:true});}
   if(a.dataset.act==='edit'){$('upd-sec').scrollIntoView({behavior:'smooth'});$('u-st').focus({preventScroll:true});}
@@ -756,44 +824,42 @@ $('panel-body').addEventListener('change',async e=>{
   $('ph-msg').textContent=t('uploading');
   try{
     const u=await upload(await shrink(file)),p=DATA.find(x=>x.id===id);if(!p)return;
-    p.photos=(p.photos||[]).concat({u,d:new Date().toISOString().slice(0,10)});save();send(patch(p));
+    p.photos=(p.photos||[]).concat({u,d:localDate()});enq({t:'patch',id:p.id});
     if(S.sel===id&&S.mode==='idle')redraw();
   }catch(_){const m=$('ph-msg');if(m){m.textContent=t('upFail');m.className='err';}}
 });
 $('panel-body').addEventListener('submit',e=>{
   e.preventDefault();
-  const today=new Date().toISOString().slice(0,10);
+  const today=localDate();
   if(e.target.id==='upd'){
     const p=DATA.find(x=>x.id===S.sel),st=$('u-st').value,memo=$('u-memo').value.trim();
     if(st==='hard'&&st!==p.st&&!memo){$('u-err').textContent=t('errHard');$('u-memo').focus();return;}
     if(st!==p.st||memo){p.st=st;p.hist.push({d:today,s:st,m:memo?one(memo):{ko:ST[st].ko,en:ST[st].en}});}
-    p.pub=$('u-pub').checked;save();send(patch(p));render();
+    p.pub=$('u-pub').checked;enq({t:'patch',id:p.id});render();
   }
   if(e.target.id==='cmf'){
     const p=DATA.find(x=>x.id===S.sel),m=$('c-m').value.trim(),k=$('c-k').value;
     if(!m){$('c-err').textContent=t('errCm');$('c-m').focus();return;}
     const c={d:today,who:$('c-who').value,k,m:one(m)};if(k==='go')c.go=$('c-go').value;
-    p.cm.push(c);save();send(api('/comments',{method:'POST',body:JSON.stringify({problem_id:p.id,data:c})}));if(S.goOnly&&!flagged(p))S.goOnly=false;render();$('cm-sec').scrollIntoView();
+    p.cm.push(c);enq({t:'cm',id:p.id,c});if(S.goOnly&&!flagged(p))S.goOnly=false;render();$('cm-sec').scrollIntoView();
   }
   if(e.target.id==='newf'){
     const title=$('n-title').value.trim(),f=id=>$(id).value.trim();
     const ep=S.editId!=null?DATA.find(x=>x.id===S.editId):null;
     if(!title&&!(ep&&untr(ep.title))){$('n-err').textContent=t('errTitle');$('n-title').focus();return;}
-    const cat=$('n-cat').value,btn=e.target.querySelector('[type=submit]');
+    const cat=$('n-cat').value;
     if(ep){
       /* keep the other language's text; only this language's text is replaced */
       const setL=(k,v)=>{const o=ep[k],n=o&&typeof o==='object'?{...o}:{};if(v)n[S.lang]=v;else delete n[S.lang];ep[k]=Object.keys(n).length?n:'';};
       setL('title',title);setL('desc',f('n-desc'));setL('since',f('n-since'));setL('aff',f('n-aff'));
       ep.cat=cat;ep.who=$('n-who').value;ep.lat=S.draft.lat;ep.lng=S.draft.lng;
-      save();send(patch(ep));S.cats.add(cat);select(ep.id);return;
+      enq({t:'patch',id:ep.id});S.cats.add(cat);select(ep.id);return;
     }
     const row={cat,lat:S.draft.lat,lng:S.draft.lng,date:today,who:$('n-who').value,st:'rec',pub:false,title:one(title),
       desc:one(f('n-desc')),since:one(f('n-since')),aff:one(f('n-aff')),hist:[{d:today,s:'rec',m:T.created}],recs:[]};
-    btn.disabled=true;
-    /* the database hands out the number, so two devices never get the same one */
-    api('/problems',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({data:row})})
-     .then(r=>{dbOn=true;return r[0].id;},()=>{dirty=true;return Math.max(0,...DATA.map(p=>p.id))+1;})
-     .then(id=>{ver++;DATA.push({...row,id,cm:[]});S.cats.add(cat);S.goOnly=false;save();select(id);});
+    /* shown at once under a temporary number; the database gives the real number when the record is uploaded */
+    const id=-Date.now();
+    DATA.push({...row,id,cm:[]});S.cats.add(cat);S.goOnly=false;select(id);enq({t:'new',id,row});
   }
 });
 $('table').addEventListener('click',e=>{
@@ -806,6 +872,7 @@ $('table').addEventListener('keydown',e=>{if(e.key==='Enter'){const r=e.target.c
 if(window.L)initMap();else $('map').innerHTML='<div class="offline">'+T.offline.ko+'<br>'+T.offline.en+'</div>';
 render();
 refresh();setInterval(refresh,4000);
+window.addEventListener('online',()=>{flush();});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
 </script>
 </body>
