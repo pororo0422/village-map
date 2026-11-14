@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>마을 문제 지도 초안</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout idea: a full-screen map app. Floating search and chips on top, a place panel on the left, round controls in the corners. */
+:root{
+  --surface:#ffffff; --ink:#202124; --muted:#5f6368; --line:#dadce0; --hover:#f1f3f4;
+  --blue:#1a73e8; --blue-soft:#e8f0fe;
+  --c-water:#1a73e8; --c-power:#f29900; --c-road:#5f6368; --c-san:#188038; --c-fac:#9334e6;
+  --ok:#188038; --warn:#b06000; --crit:#c5221f;
+  --shadow:0 1px 2px rgba(60,64,67,.3),0 2px 6px 2px rgba(60,64,67,.15);
+  --f:"Roboto","Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font-family:var(--f);font-size:14px;line-height:1.5;color:var(--ink);background:#e8eaed;overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+[hidden]{display:none!important}
+.num{font-variant-numeric:tabular-nums}
+#map{position:absolute;inset:0;z-index:0;background:#e8eaed}
+#map.pick,#map.pick .leaflet-interactive{cursor:crosshair}
+.leaflet-container{font-family:var(--f)}
+.leaflet-bar{border:0!important;box-shadow:var(--shadow)!important;border-radius:8px!important;overflow:hidden}
+.leaflet-bar a{width:40px!important;height:40px!important;line-height:40px!important;color:#666!important;font-size:22px!important}
+.leaflet-bottom.leaflet-right .leaflet-control-zoom{margin:0 12px 34px 0}
+.pin{background:none;border:0}
+.pin svg{display:block;transform-origin:50% 95%;transition:transform .12s;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
+.pin.on svg{transform:scale(1.35)}
+.pin:focus-visible{outline:none}
+.pin:focus-visible svg{transform:scale(1.35)}
+
+/* top bar */
+.top{position:absolute;z-index:1100;left:12px;right:12px;top:12px;display:flex;gap:10px;align-items:flex-start;pointer-events:none}
+.top>*{pointer-events:auto}
+.searchwrap{position:relative;flex:0 0 376px;max-width:100%}
+.search{display:flex;align-items:center;gap:8px;background:var(--surface);border-radius:24px;box-shadow:var(--shadow);height:48px;padding:0 8px 0 16px}
+.search svg{flex:none}
+.search input{flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:15px}
+.search .x{border:0;background:transparent;width:36px;height:36px;border-radius:50%;display:grid;place-items:center}
+.search .x:hover{background:var(--hover)}
+.results{position:absolute;left:0;right:0;top:54px;background:var(--surface);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;padding:6px 0}
+.results button{display:flex;gap:10px;align-items:center;width:100%;text-align:left;border:0;background:transparent;padding:8px 16px}
+.results button:hover,.results button:focus-visible{background:var(--hover)}
+.results .sub{color:var(--muted);font-size:12.5px;display:block}
+.results .empty{padding:8px 16px;color:var(--muted)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:6px 4px 8px;flex:1 1 auto;min-width:0;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px 0 10px;border-radius:18px;border:0;background:var(--surface);box-shadow:var(--shadow);font-weight:500;white-space:nowrap}
+.chip i{width:12px;height:12px;border-radius:50%;background:var(--c);border:2px solid var(--c)}
+.chip[aria-pressed="false"]{color:var(--muted);background:#f1f3f4;box-shadow:none;border:1px solid var(--line)}
+.chip[aria-pressed="false"] i{background:transparent}
+.chip.t{padding-left:14px}
+.chip.t[aria-pressed="true"]{background:var(--blue-soft);color:var(--blue)}
+.tools{display:flex;gap:8px;flex:none;padding:6px 0}
+.pillbtn{height:36px;border-radius:18px;border:0;background:var(--surface);box-shadow:var(--shadow);padding:0 14px;font-weight:500;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.pillbtn:hover{background:#f8f9fa}
+.seg{display:inline-flex;height:36px;border-radius:18px;background:var(--surface);box-shadow:var(--shadow);overflow:hidden}
+.seg button{border:0;background:transparent;padding:0 12px;font-weight:500;color:var(--muted);white-space:nowrap}
+.seg button[aria-pressed="true"]{background:var(--blue-soft);color:var(--blue)}
+
+/* left panel */
+.panel{position:absolute;z-index:1000;left:0;top:0;bottom:0;width:400px;max-width:100%;background:var(--surface);box-shadow:0 0 20px rgba(0,0,0,.3);display:flex;flex-direction:column}
+.panel .scroll{overflow-y:auto;padding:76px 0 24px;flex:1}
+.hero{height:112px;background:linear-gradient(135deg,var(--c),color-mix(in srgb,var(--c) 55%,#fff));display:flex;align-items:flex-end;padding:12px 24px;color:#fff;font-weight:500;letter-spacing:.02em}
+.sec{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+.sec:last-child{border-bottom:0}
+.sec h2{font-size:22px;font-weight:400;margin:0;line-height:1.3;text-wrap:balance}
+.sec h3{font-size:14px;font-weight:500;margin:0}
+.sec p{margin:0}
+.sub{color:var(--muted)}
+.rowline{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.acts{display:flex;gap:6px;justify-content:space-around;padding:12px 16px;border-bottom:1px solid var(--line)}
+.act{border:0;background:transparent;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;color:var(--blue);font-weight:500;padding:4px 8px;border-radius:8px;min-width:76px}
+.act span.ic{width:36px;height:36px;border-radius:50%;border:1px solid var(--line);display:grid;place-items:center}
+.act.main span.ic{background:var(--blue);border-color:var(--blue)}
+.act:hover span.ic{background:var(--blue-soft)} .act.main:hover span.ic{background:#1765cc}
+.info{display:grid;grid-template-columns:24px 1fr;gap:12px 16px;align-items:start;margin:0}
+.info dt{color:var(--blue);display:grid;place-items:center;height:21px}
+.info dd{margin:0}
+.info dd small{display:block;color:var(--muted);font-size:12px}
+.pill{display:inline-flex;align-items:center;border-radius:999px;padding:1px 10px;font-size:12.5px;font-weight:500;border:1px solid var(--pc);color:var(--pc);white-space:nowrap}
+.pill.rec{--pc:var(--muted)} .pill.conf{--pc:var(--blue)} .pill.prog{--pc:var(--warn)} .pill.done{--pc:var(--ok)} .pill.hard{--pc:var(--crit)}
+.pill.done{background:var(--ok);color:#fff}
+.cat{display:inline-flex;align-items:center;gap:6px}
+.cat i{width:10px;height:10px;border-radius:50%;background:var(--c)}
+.tl{list-style:none;margin:0;padding:0 0 0 14px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:10px}
+.tl .d{color:var(--muted);font-size:12px;margin-right:6px}
+.recs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.recs li{background:#f8f9fa;border-radius:8px;padding:8px 12px}
+.recs .k{font-size:12px;color:var(--muted);display:block}
+.cms{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.cms li{border:1px solid var(--line);border-radius:8px;padding:8px 12px;display:flex;flex-direction:column;gap:4px}
+.cms .meta{font-size:12px;color:var(--muted);margin-left:auto}
+.cms p{overflow-wrap:anywhere}
+.pill.g-ok{--pc:var(--ok)} .pill.g-care{--pc:var(--warn)} .pill.g-no{--pc:var(--crit)}
+.pill.g-no{background:var(--crit);color:#fff}
+form.stack{display:flex;flex-direction:column;gap:12px}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+label.f input,label.f select,label.f textarea{border:1px solid var(--line);border-radius:4px;padding:8px 10px;font-size:14px;color:var(--ink);background:#fff}
+label.f textarea{min-height:68px;resize:vertical}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.check{display:flex;gap:8px;align-items:center}
+.err{color:var(--crit);font-size:13px}
+.hint{color:var(--muted);font-size:12.5px}
+.btn{height:36px;border-radius:18px;border:1px solid var(--line);background:#fff;color:var(--blue);padding:0 20px;font-weight:500}
+.btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn.primary:hover{background:#1765cc}
+.closebtn{position:absolute;top:66px;right:10px;width:36px;height:36px;border-radius:50%;border:0;background:rgba(255,255,255,.92);box-shadow:var(--shadow);display:grid;place-items:center;z-index:2}
+
+/* corners */
+.fab{position:absolute;z-index:900;right:12px;bottom:132px;height:48px;border-radius:24px;border:0;background:var(--blue);color:#fff;font-weight:500;padding:0 20px 0 14px;box-shadow:var(--shadow);display:inline-flex;align-items:center;gap:8px}
+.fab:hover{background:#1765cc}
+.layerbtn{position:absolute;z-index:900;left:12px;bottom:34px;width:72px;height:72px;border-radius:10px;border:2px solid #fff;box-shadow:var(--shadow);padding:0;overflow:hidden;display:flex;align-items:flex-end;justify-content:center;font-size:12px;font-weight:500;color:#fff;transition:left .2s}
+.layerbtn span{background:rgba(0,0,0,.55);width:100%;padding:3px 0}
+.layerbtn.sat{background:linear-gradient(160deg,#2f4a2c,#55713f 45%,#2c5a73)}
+.layerbtn.road{background:linear-gradient(160deg,#f3efe6 0 38%,#fff 38% 46%,#f3efe6 46% 62%,#aad3df 62%)}
+.legend{position:absolute;z-index:900;left:96px;bottom:34px;background:var(--surface);border-radius:10px;box-shadow:var(--shadow);padding:8px 12px;display:flex;gap:14px;align-items:center;font-size:12.5px;transition:left .2s;max-width:calc(100% - 180px);flex-wrap:wrap}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+body.panel-open .layerbtn{left:412px} body.panel-open .legend{left:496px}
+.notice{position:absolute;z-index:900;left:50%;transform:translateX(-50%);bottom:6px;background:rgba(32,33,36,.82);color:#fff;border-radius:12px;padding:2px 12px;font-size:12px;white-space:nowrap;max-width:calc(100% - 24px);overflow:hidden;text-overflow:ellipsis}
+.pickbar{position:absolute;z-index:1050;left:50%;transform:translateX(-50%);top:76px;background:var(--ink);color:#fff;border-radius:24px;padding:8px 8px 8px 18px;display:flex;gap:12px;align-items:center;box-shadow:var(--shadow);max-width:calc(100% - 24px)}
+.pickbar button{border:0;background:rgba(255,255,255,.16);color:#fff;border-radius:16px;height:32px;padding:0 14px}
+.btn.danger{color:var(--crit)}
+.photos{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.ph{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:#f1f3f4}
+.ph img{width:100%;height:100%;object-fit:cover;display:block}
+.ph button{position:absolute;top:4px;right:4px;width:26px;height:26px;border-radius:50%;border:0;background:rgba(32,33,36,.72);color:#fff;font-size:16px;line-height:1;display:grid;place-items:center}
+.filebtn{display:inline-flex;align-items:center;align-self:flex-start;cursor:pointer;position:relative}
+.filebtn input{position:absolute;opacity:0;width:1px;height:1px}
+.filebtn:focus-within{outline:2px solid var(--blue);outline-offset:2px}
+.locbtn{position:absolute;z-index:900;right:12px;bottom:192px;width:40px;height:40px;border-radius:50%;border:0;background:var(--surface);box-shadow:var(--shadow);display:grid;place-items:center;color:#666}
+.locbtn:hover{background:#f8f9fa}
+.locbtn.on{color:var(--blue)}
+.locbtn.busy{animation:locpulse 1s ease-in-out infinite}
+@keyframes locpulse{50%{opacity:.45}}
+@media (prefers-reduced-motion:reduce){.locbtn.busy{animation:none;opacity:.6}}
+.toast{position:absolute;z-index:1300;left:50%;transform:translateX(-50%);bottom:40px;background:var(--ink);color:#fff;border-radius:8px;padding:10px 16px;box-shadow:var(--shadow);max-width:calc(100% - 24px);text-align:center}
+.offline{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:var(--muted)}
+
+/* list sheet */
+.scrim{position:absolute;inset:0;z-index:1200;background:rgba(32,33,36,.45);display:flex;justify-content:center;align-items:flex-start;padding:24px 16px;overflow-y:auto}
+.sheet{background:var(--surface);border-radius:16px;box-shadow:var(--shadow);width:100%;max-width:1000px;padding:20px 24px 24px;display:flex;flex-direction:column;gap:18px}
+.sheet header{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.sheet h2{margin:0;font-size:22px;font-weight:400}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+.stat{border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.stat h3{margin:0;font-size:13px;font-weight:500;color:var(--muted)}
+.big{display:flex;gap:22px}
+.big div{display:flex;flex-direction:column}
+.big b{font-size:30px;font-weight:400;line-height:1.1}
+.big span{font-size:12.5px;color:var(--muted)}
+.meter{height:8px;border-radius:4px;background:#e8eaed;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--ok)}
+.cbar{display:grid;grid-template-columns:76px 1fr 24px;gap:8px;align-items:center}
+.cbar .track{display:flex;gap:3px;height:14px}
+.cbar .track i{height:100%;border-radius:3px;background:var(--c);border:2px solid var(--c)}
+.cbar .track i.solved{background:transparent}
+.cbar .n{text-align:right}
+.srow{display:flex;justify-content:space-between;align-items:center}
+.tablebox{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+table{border-collapse:collapse;width:100%;min-width:640px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12.5px;color:var(--muted);font-weight:500;white-space:nowrap;background:#f8f9fa}
+th button{all:unset;cursor:pointer}
+th button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+tbody tr{cursor:pointer}
+tbody tr:hover{background:var(--hover)}
+tbody tr:last-child td{border-bottom:0}
+td.t{font-weight:500}
+td.t .sub{display:block;font-weight:400;font-size:13px;max-width:46ch}
+
+@media (max-width:900px){
+  .top{flex-wrap:wrap;gap:4px 10px}
+  .searchwrap{flex:1 1 100%}
+  .chips{flex:1 1 100%;padding-bottom:4px}
+  .tools{flex:1 1 100%;overflow-x:auto;padding:2px 4px 6px}
+  .panel{top:auto;height:58%;width:100%;border-radius:16px 16px 0 0}
+  .panel .scroll{padding-top:0}
+  .closebtn{top:10px}
+  body.panel-open .layerbtn,body.panel-open .legend,body.panel-open .fab,body.panel-open .locbtn,body.panel-open .notice{display:none}
+  .legend{left:12px;bottom:114px;max-width:calc(100% - 24px)}
+  .pickbar{top:150px}
+}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="top">
+  <div class="searchwrap">
+    <div class="search">
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="#5f6368" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"/></svg>
+      <input id="q" type="search" autocomplete="off">
+      <button type="button" class="x" id="q-clear" hidden><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="#5f6368" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+    </div>
+    <div class="results" id="results" hidden></div>
+  </div>
+  <div class="chips" id="chips"></div>
+  <div class="tools">
+    <button type="button" class="pillbtn" id="open-list"></button>
+    <div class="seg" role="group" aria-label="Who is viewing">
+      <button type="button" id="r-school"></button><button type="button" id="r-public"></button>
+    </div>
+    <div class="seg" role="group" aria-label="Language">
+      <button type="button" id="l-ko">한국어</button><button type="button" id="l-en">EN</button>
+    </div>
+  </div>
+</div>
+
+<div class="pickbar" id="pickbar" hidden><span id="pickmsg"></span><button type="button" id="pick-here"></button><button type="button" id="pick-cancel"></button></div>
+
+<aside class="panel" id="panel" hidden>
+  <button type="button" class="closebtn" id="panel-close"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="#5f6368" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+  <div class="scroll" id="panel-body" aria-live="polite"></div>
+</aside>
+
+<button type="button" class="fab" id="add"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg><span id="add-l"></span></button>
+<button type="button" class="locbtn" id="locate"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8m8.94 3A8.99 8.99 0 0 0 13 3.06V1h-2v2.06A8.99 8.99 0 0 0 3.06 11H1v2h2.06A8.99 8.99 0 0 0 11 20.94V23h2v-2.06A8.99 8.99 0 0 0 20.94 13H23v-2zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14"/></svg></button>
+<div class="toast" id="toast" role="status" hidden></div>
+<button type="button" class="layerbtn sat" id="layer"><span id="layer-l"></span></button>
+<div class="legend" id="legend"></div>
+<div class="notice" id="notice"></div>
+
+<div class="scrim" id="scrim" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-h">
+    <header><h2 id="sheet-h"></h2><span class="rowline"><button type="button" class="btn" id="sheet-reset"></button><button type="button" class="btn" id="sheet-close"></button></span></header>
+    <div class="stats" id="stats"></div>
+    <div class="tablebox"><table id="table"></table></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+/* ---------- words ---------- */
+const T={
+ place:{ko:'필리핀 레이테주 타나우안, 바랑가이 산 로케',en:'Barangay San Roque, Tanauan, Leyte, Philippines'},
+ search:{ko:'마을 문제 검색',en:'Search village problems'},
+ list:{ko:'목록과 통계',en:'List & stats'},
+ rSchool:{ko:'학교·봉사팀',en:'School & team'}, rPublic:{ko:'공개 보기',en:'Public'},
+ add:{ko:'문제 기록',en:'Record a problem'},
+ pickMsg:{ko:'지도에서 문제가 있는 곳을 누르세요',en:'Click the place where the problem is'},
+ cancel:{ko:'취소',en:'Cancel'}, close:{ko:'닫기',en:'Close'}, save:{ko:'저장',en:'Save'},
+ sat:{ko:'위성',en:'Satellite'}, road:{ko:'지도',en:'Map'},
+ nSchool:{ko:'지도는 실제 지도이고, 표시된 문제는 모두 지어낸 예시입니다 · 학교·봉사팀 보기',en:'The map is real. Every problem shown is an invented example · School & team view'},
+ nPublic:{ko:'지도는 실제 지도이고, 표시된 문제는 모두 지어낸 예시입니다 · 공개된 문제만 보는 중',en:'The map is real. Every problem shown is an invented example · Public problems only'},
+ openOnly:{ko:'해결 안 된 것만',en:'Unsolved only'},
+ lgFill:{ko:'그대로',en:'Still a problem'}, lgRing:{ko:'해결됨',en:'Solved'}, lgX:{ko:'해결 어려움',en:'Hard to solve'},
+ kind:{ko:'종류',en:'Kind'}, date:{ko:'기록한 날',en:'Recorded'}, who:{ko:'알려준 사람',en:'Told by'}, coord:{ko:'위도, 경도',en:'Latitude, longitude'},
+ since:{ko:'언제부터',en:'Since'}, affected:{ko:'누가 불편한가',en:'Who is affected'},
+ status:{ko:'상태',en:'Status'}, vis:{ko:'공개 여부',en:'Visibility'}, pub:{ko:'공개',en:'Public'}, priv:{ko:'비공개',en:'Private'},
+ history:{ko:'그동안의 변화',en:'What has changed'}, records:{ko:'측정값과 수리 기록',en:'Measurements and repairs'},
+ measure:{ko:'물 지도 측정값',en:'Water map reading'}, repair:{ko:'수리 기록장',en:'Repair log'},
+ update:{ko:'상태 바꾸기',en:'Change status'}, zoomTo:{ko:'가까이 보기',en:'Zoom in'}, copy:{ko:'좌표 복사',en:'Copy coordinates'}, copied:{ko:'복사됨',en:'Copied'},
+ memo:{ko:'메모',en:'Note'}, memoHard:{ko:'어려운 이유 (꼭 적어 주세요)',en:'Why it is hard (required)'},
+ errHard:{ko:'해결이 어려운 이유를 적어 주세요. 다음 사람에게 도움이 됩니다.',en:'Please write why it is hard to solve. It helps whoever comes next.'},
+ errTitle:{ko:'제목을 적어 주세요.',en:'Please write a title.'},
+ teacherOnly:{ko:'공개 여부는 교사나 현지 기관이 정합니다.',en:'A teacher or the local partner decides visibility.'},
+ makePub:{ko:'이 문제를 공개',en:'Make this problem public'},
+ newTitle:{ko:'새 문제 기록',en:'Record a problem'},
+ moveHint:{ko:'지도를 다시 누르면 위치가 바뀝니다.',en:'Click the map again to move the pin.'},
+ fTitle:{ko:'제목 (무엇이 문제인가요)',en:'Title (what is the problem)'}, fDesc:{ko:'설명',en:'Description'},
+ fSince:{ko:'언제부터',en:'Since when'}, fAff:{ko:'누가 불편한가요',en:'Who is affected'},
+ fPrivacy:{ko:'사람 이름, 집 위치, 얼굴이 나온 사진은 적지 않습니다. 범죄나 다툼 이야기는 받지 않습니다.',en:'Do not write names, home locations or photos of faces. Crime and disputes are not recorded here.'},
+ created:{ko:'마을 걷기에서 기록',en:'Recorded on the village walk'},
+ total:{ko:'전체 문제',en:'All problems'}, rate:{ko:'해결된 비율',en:'Share solved'}, solved:{ko:'해결됨',en:'solved'},
+ byKind:{ko:'종류별 문제 수',en:'Problems by kind'}, byStatus:{ko:'상태별',en:'By status'},
+ barNote:{ko:'속이 찬 칸은 그대로, 테두리만 있는 칸은 해결됨',en:'Filled blocks are open, outlined blocks are solved'},
+ thId:{ko:'번호',en:'No.'}, thTitle:{ko:'제목',en:'Title'},
+ none:{ko:'조건에 맞는 문제가 없습니다.',en:'No problems match.'},
+ comments:{ko:'코멘트',en:'Comments'}, cmAdd:{ko:'코멘트 남기기',en:'Leave a comment'},
+ cmKind:{ko:'무엇에 대한 코멘트인가요',en:'What is it about'},
+ kWhere:{ko:'어디가 문제인지',en:'Where the problem is'}, kGo:{ko:'가도 되는지',en:'Safe to go?'}, kFix:{ko:'해결 상황',en:'Fix progress'},
+ goQ:{ko:'지금 가도 되나요',en:'Is it OK to go there now'},
+ gOk:{ko:'가도 됨',en:'OK to go'}, gCare:{ko:'조심해서 가기',en:'Go with care'}, gNo:{ko:'가지 마세요',en:'Do not go'},
+ cmText:{ko:'내용',en:'Comment'}, cmNone:{ko:'아직 코멘트가 없습니다.',en:'No comments yet.'},
+ errCm:{ko:'내용을 적어 주세요.',en:'Please write the comment.'},
+ cmPublic:{ko:'코멘트는 학교·봉사팀 보기에서 남길 수 있습니다.',en:'Comments can be added in the School & team view.'},
+ goOnly:{ko:'조심·가지 말 곳만',en:'Caution spots only'},
+ lgCare:{ko:'조심',en:'Care'}, lgNo:{ko:'가지 마세요',en:'Do not go'},
+ savedDb:{ko:'공유 데이터베이스에 저장됨',en:'Saved to the shared database'}, dbOff:{ko:'데이터베이스 연결 안 됨 · 이 브라우저에만 저장',en:'Database not reachable · saved in this browser only'},
+ dbDirty:{ko:'데이터베이스에 보내지 못한 변경이 있음 · 이 브라우저에만 저장됨',en:'Some changes did not reach the database · saved in this browser only'},
+ reset:{ko:'브라우저 저장분 지우기',en:'Clear browser copy'},
+ resetQ:{ko:'이 브라우저에만 저장된 내용을 지우고 데이터베이스(연결이 안 되면 처음 예시)에서 다시 불러올까요?',en:'Delete what is saved only in this browser and reload from the database (or the original examples if it cannot be reached)?'},
+ myLoc:{ko:'내 위치',en:'My location'}, here:{ko:'내 위치에 기록',en:'Use my location'},
+ locDenied:{ko:'위치 권한이 꺼져 있습니다. 브라우저 설정에서 이 페이지의 위치 사용을 허용해 주세요.',en:'Location permission is off. Allow location for this page in the browser settings.'},
+ locFail:{ko:'지금 위치를 찾지 못했습니다. 하늘이 보이는 곳에서 다시 눌러 주세요.',en:'Could not find your location. Try again somewhere with open sky.'},
+ locNo:{ko:'이 브라우저에서는 위치 기능을 쓸 수 없습니다.',en:'Location is not available in this browser.'},
+ manage:{ko:'기록 고치기',en:'Edit this record'}, editRec:{ko:'내용·위치 수정',en:'Edit text & place'}, del:{ko:'삭제',en:'Delete'},
+ editTitle:{ko:'기록 수정',en:'Edit record'},
+ delQ:{ko:'이 문제를 지도와 목록에서 지울까요?',en:'Remove this problem from the map and list?'},
+ delHint:{ko:'삭제한 기록은 화면에서 사라지지만 데이터베이스에는 남아 있어 되살릴 수 있습니다.',en:'Deleted records disappear from the page but stay in the database and can be restored.'},
+ untrHint:{ko:'한국어로 옮기지 않은 내용은 영어 원문 그대로 보여 줍니다.',en:'Text not yet written in English is shown in the original Korean.'},
+ untrHow:{ko:"'내용·위치 수정'에서 한국어로 적을 수 있습니다.",en:"You can add English under 'Edit text & place'."},
+ trHint:{ko:'흐린 글씨는 영어 원문입니다. 그 칸에 한국어로 적으면 한국어 보기에서 그 글이 나옵니다.',en:'Grey text is the Korean original. Type English in that box and it will show in the English view.'},
+ orig:{ko:'원문',en:'original'},
+ photos:{ko:'사진',en:'Photos'}, addPhoto:{ko:'사진 추가',en:'Add a photo'}, rmPhoto:{ko:'사진 빼기',en:'Remove photo'},
+ photoHint:{ko:'얼굴이나 집 안이 나오지 않게 찍어 주세요. 사진은 작게 줄여서 올리고, 사진에 든 위치 정보는 지워집니다.',en:'Keep faces and home interiors out of the picture. Photos are shrunk before upload and their embedded location data is removed.'},
+ uploading:{ko:'사진 올리는 중…',en:'Uploading photo…'}, upFail:{ko:'사진을 올리지 못했습니다. 연결을 확인하고 다시 해 주세요.',en:'The photo could not be uploaded. Check the connection and try again.'},
+ offline:{ko:'지도를 불러오지 못했습니다. 인터넷에 연결한 뒤 다시 열어 주세요.',en:'The map could not load. Connect to the internet and open the page again.'}
+};
+const CATS={
+ water:{ko:'물',en:'Water',c:'#1a73e8'}, power:{ko:'전기',en:'Power',c:'#f29900'}, road:{ko:'길',en:'Roads',c:'#5f6368'},
+ san:{ko:'위생',en:'Sanitation',c:'#188038'}, fac:{ko:'시설',en:'Facilities',c:'#9334e6'}
+};
+const ST={rec:{ko:'기록됨',en:'Recorded'},conf:{ko:'확인됨',en:'Confirmed'},prog:{ko:'해결 중',en:'In progress'},done:{ko:'해결됨',en:'Solved'},hard:{ko:'해결 어려움',en:'Hard to solve'}};
+const WHO={student:{ko:'학생',en:'Student'},resident:{ko:'주민',en:'Resident'},teacher:{ko:'교사',en:'Teacher'}};
+
+/* ---------- example data: one problem = one spreadsheet row. Coordinates are real street points; the problems are invented. ---------- */
+const B=(ko,en)=>({ko,en});
+let DATA=[
+ {id:1,cat:'water',lat:11.10862,lng:125.02117,date:'2027-01-14',who:'student',st:'conf',pub:true,
+  title:B('손펌프 물에서 흙냄새가 남','Hand pump water smells of soil'),
+  desc:B('골목 손펌프 물이 비 온 뒤 며칠 동안 누렇고 흙냄새가 남.','Water from the street hand pump turns yellowish and smells of soil for days after rain.'),
+  since:B('작년 우기부터','Since last rainy season'),aff:B('펌프 주변 스무 집 정도','About twenty households near the pump'),
+  hist:[{d:'2027-01-14',s:'rec',m:B('마을 걷기에서 기록','Recorded on the village walk')},{d:'2027-01-16',s:'conf',m:B('학생들이 직접 만든 센서로 측정해 확인','Students confirmed it with the sensor they built')}],
+  recs:[{k:'measure',t:B('탁도 18 NTU, 수온 28.5℃ (2027-01-16, 비 온 다음 날)','Turbidity 18 NTU, water 28.5°C (2027-01-16, day after rain)')}]},
+ {id:2,cat:'water',lat:11.10741,lng:125.02198,date:'2027-01-15',who:'resident',st:'rec',pub:false,
+  title:B('공동 수도가 낮에 안 나옴','Shared tap runs dry at midday'),
+  desc:B('바닷가 쪽 공동 수도가 오전 10시쯤부터 오후 3시쯤까지 물이 나오지 않음.','The shared tap near the shore gives no water from about 10 am to 3 pm.'),
+  since:B('건기마다','Every dry season'),aff:B('바닷가 쪽 골목 주민','Residents of the seaside lanes'),
+  hist:[{d:'2027-01-15',s:'rec',m:B('주민 이야기 듣기에서 기록','Recorded from resident interviews')}],recs:[]},
+ {id:3,cat:'water',lat:11.11092,lng:125.02153,date:'2027-01-13',who:'teacher',st:'done',pub:true,
+  title:B('학교 물탱크 뚜껑이 깨짐','School water tank lid is broken'),
+  desc:B('뚜껑이 깨져 나뭇잎과 벌레가 들어감.','The lid is cracked, so leaves and insects get in.'),
+  since:B('몇 달 전','A few months ago'),aff:B('전교생','All students'),
+  hist:[{d:'2027-01-13',s:'rec',m:B('출발 전 질문지 답변으로 기록','Recorded from the pre-trip questionnaire')},{d:'2027-01-18',s:'prog',m:B('수리 클리닉에서 맡음','Taken on by the repair clinic')},{d:'2027-01-20',s:'done',m:B('새 뚜껑을 만들어 덮음','A new lid was made and fitted')}],
+  recs:[{k:'repair',t:B('합판과 방수 천으로 뚜껑 제작, 학생 4명 참여','Lid built from plywood and tarp by 4 students')},{k:'measure',t:B('탁도 3 NTU (2027-01-21, 교체 뒤)','Turbidity 3 NTU (2027-01-21, after the fix)')}]},
+ {id:4,cat:'power',lat:11.10800,lng:125.02157,date:'2027-01-15',who:'resident',st:'hard',pub:false,
+  title:B('골목이 저녁마다 정전됨','Lane loses power most evenings'),
+  desc:B('저녁 6시에서 8시 사이에 전기가 자주 끊김.','Power often cuts out between 6 and 8 pm.'),
+  since:B('2년쯤 전','About two years ago'),aff:B('골목 서른 집 정도, 저녁에 공부하는 학생','About thirty households, and students who study at night'),
+  hist:[{d:'2027-01-15',s:'rec',m:B('주민 이야기 듣기에서 기록','Recorded from resident interviews')},{d:'2027-01-19',s:'conf',m:B('세 집에서 같은 이야기를 들음','Three households said the same')},{d:'2027-01-22',s:'hard',m:B('전력 회사의 배전 문제라 마을과 봉사팀이 고칠 수 없음. 바랑가이 사무소에 전달함.','A grid problem on the power company side. The village and the team cannot fix it. Passed to the barangay office.')}],recs:[]},
+ {id:5,cat:'power',lat:11.11118,lng:125.02138,date:'2027-01-14',who:'student',st:'prog',pub:true,
+  title:B('교실 두 곳의 형광등이 안 켜짐','Lights are out in two classrooms'),
+  desc:B('5학년, 6학년 교실 형광등이 켜지지 않아 흐린 날 칠판이 잘 안 보임.','The lights in the grade 5 and 6 rooms do not work, so the board is hard to read on cloudy days.'),
+  since:B('이번 학기 초','Start of this term'),aff:B('두 반 학생 70명쯤','About 70 students in two classes'),
+  hist:[{d:'2027-01-14',s:'rec',m:B('마을 걷기에서 기록','Recorded on the village walk')},{d:'2027-01-18',s:'prog',m:B('수리 클리닉에서 한 교실을 고침. 나머지는 부품 기다리는 중.','The repair clinic fixed one room. The other is waiting for parts.')}],
+  recs:[{k:'repair',t:B('5학년 교실: 안정기 교체로 해결','Grade 5 room: fixed by replacing the ballast')}]},
+ {id:6,cat:'power',lat:11.11146,lng:125.01989,date:'2027-01-15',who:'resident',st:'conf',pub:false,
+  title:B('다리에 가로등이 없음','No light on the bridge'),
+  desc:B('해가 지면 다리가 캄캄해서 걸어서 건너기 무서움.','The bridge is pitch dark after sunset and feels unsafe to cross on foot.'),
+  since:B('오래전부터','For a long time'),aff:B('저녁에 다리를 건너는 사람','Anyone crossing in the evening'),
+  hist:[{d:'2027-01-15',s:'rec',m:B('주민 이야기 듣기에서 기록','Recorded from resident interviews')},{d:'2027-01-17',s:'conf',m:B('저녁에 직접 가서 확인','Checked in person after dark')}],recs:[]},
+ {id:7,cat:'road',lat:11.11010,lng:125.02096,date:'2027-01-15',who:'resident',st:'conf',pub:true,
+  title:B('비가 오면 잠기는 길','Road that floods when it rains'),
+  desc:B('학교 가는 길이 우기에 무릎까지 잠김.','The road to school floods knee-deep in the rainy season.'),
+  since:B('매년 우기','Every rainy season'),aff:B('등교하는 학생 모두','Every student walking to school'),
+  hist:[{d:'2027-01-15',s:'rec',m:B('마을 걷기에서 기록','Recorded on the village walk')},{d:'2027-01-16',s:'conf',m:B('주민 두 명에게 물어 확인','Confirmed by two residents')},{d:'2027-03-10',s:'conf',m:B('마을에서 배수로 공사 논의 중','The village is discussing a drainage ditch')}],recs:[]},
+ {id:8,cat:'road',lat:11.10989,lng:125.01858,date:'2027-01-16',who:'student',st:'rec',pub:false,
+  title:B('다리 난간이 한쪽에 없음','Bridge is missing a railing on one side'),
+  desc:B('한쪽 난간이 떨어져 나가 어린아이가 건너기 위험함.','One railing has fallen off, which is risky for small children.'),
+  since:B('지난 태풍 뒤','After the last typhoon'),aff:B('강 건너에서 등교하는 학생','Students who cross to get to school'),
+  hist:[{d:'2027-01-16',s:'rec',m:B('마을 걷기에서 기록','Recorded on the village walk')}],recs:[]},
+ {id:9,cat:'road',lat:11.10958,lng:125.01969,date:'2027-01-14',who:'resident',st:'done',pub:true,
+  title:B('시장 가는 길이 움푹 패임','Deep pothole on the way to the market'),
+  desc:B('오토바이가 자주 넘어지던 곳.','Motorbikes kept slipping here.'),
+  since:B('작년','Last year'),aff:B('시장에 오가는 사람','People going to the market'),
+  hist:[{d:'2027-01-14',s:'rec',m:B('마을 걷기에서 기록','Recorded on the village walk')},{d:'2027-02-06',s:'done',m:B('주민들이 자갈로 메움','Residents filled it with gravel')}],recs:[]},
+ {id:10,cat:'san',lat:11.10906,lng:125.02202,date:'2027-01-16',who:'student',st:'prog',pub:true,
+  title:B('바닷가에 쓰레기가 쌓임','Rubbish piling up on the shore'),
+  desc:B('길 끝 바닷가에 비닐과 병이 쌓여 물이 들어오면 바다로 쓸려 감.','Plastic and bottles pile up where the street meets the shore and wash out with the tide.'),
+  since:B('오래전부터','For a long time'),aff:B('바닷가 주민과 고기 잡는 사람','Seaside residents and people who fish'),
+  hist:[{d:'2027-01-16',s:'rec',m:B('마을 걷기에서 기록','Recorded on the village walk')},{d:'2027-02-01',s:'prog',m:B('학교 동아리가 한 달에 한 번 치우기로 함','A school club now cleans it once a month')}],recs:[]},
+ {id:11,cat:'san',lat:11.11072,lng:125.02178,date:'2027-01-13',who:'teacher',st:'done',pub:true,
+  title:B('학교 화장실 손 씻는 곳 고장','School toilet handwashing tap broken'),
+  desc:B('수도꼭지 두 개가 모두 새서 잠가 두었음.','Both taps leaked and had been shut off.'),
+  since:B('작년 말','Late last year'),aff:B('전교생','All students'),
+  hist:[{d:'2027-01-13',s:'rec',m:B('출발 전 질문지 답변으로 기록','Recorded from the pre-trip questionnaire')},{d:'2027-01-19',s:'done',m:B('수리 클리닉에서 수도꼭지 교체','Taps replaced at the repair clinic')}],
+  recs:[{k:'repair',t:B('수도꼭지 2개 교체, 남은 고무 패킹 4개는 교무실 보관','2 taps replaced, 4 spare washers kept in the staff room')}]},
+ {id:12,cat:'fac',lat:11.10788,lng:125.01970,date:'2027-01-17',who:'teacher',st:'rec',pub:false,
+  title:B('마을 회관 지붕에서 비가 샘','Community hall roof leaks'),
+  desc:B('비가 오면 모임 방 한쪽에 물이 떨어져 쓸 수 없음.','When it rains, water drips into one side of the meeting room and it cannot be used.'),
+  since:B('지난 태풍 뒤','After the last typhoon'),aff:B('회관에서 모이는 주민','Residents who meet at the hall'),
+  hist:[{d:'2027-01-17',s:'rec',m:B('교사가 알려 줌','Reported by a teacher')}],recs:[]},
+ {id:13,cat:'fac',lat:11.10657,lng:125.01950,date:'2027-01-14',who:'student',st:'prog',pub:false,
+  title:B('농구장 조명 두 개가 꺼짐','Two basketball court lights are out'),
+  desc:B('해가 지면 농구장을 쓸 수 없음.','The court cannot be used after sunset.'),
+  since:B('이번 학기','This term'),aff:B('방과 후에 운동하는 학생','Students who play after school'),
+  hist:[{d:'2027-01-14',s:'rec',m:B('마을 걷기에서 기록','Recorded on the village walk')},{d:'2027-01-20',s:'prog',m:B('조명 하나는 수리 클리닉에서 고침','One light fixed at the repair clinic')}],
+  recs:[{k:'repair',t:B('1번 조명: 끊어진 전선 연결','Light 1: reconnected a broken wire')}]}
+];
+
+/* ---------- comments: k = what it is about (where / go / fix). A "go" comment also carries a verdict (ok / care / no). Invented examples. ---------- */
+const CK={where:'kWhere',go:'kGo',fix:'kFix'}, CG={ok:'gOk',care:'gCare',no:'gNo'};
+const SEED_CM={
+ 1:[{d:'2027-01-16',who:'student',k:'where',m:B('펌프 자체보다 펌프 옆 배수로 쪽이 문제 같음. 비 오면 흙탕물이 펌프 밑으로 고임.','The drain next to the pump seems to be the cause. Muddy water pools under the pump when it rains.')},
+    {d:'2027-01-17',who:'teacher',k:'go',go:'ok',m:B('가는 길은 안전함. 물은 마시지 말고 측정만 할 것.','The way there is safe. Do not drink the water, only measure it.')}],
+ 6:[{d:'2027-01-17',who:'teacher',k:'go',go:'care',m:B('낮에는 괜찮음. 해가 진 뒤에는 손전등을 들고 두 명 이상 같이 갈 것.','Fine in daylight. After dark take a torch and go in pairs.')}],
+ 7:[{d:'2027-01-16',who:'resident',k:'where',m:B('가게 앞에서 학교 정문까지 50m쯤이 가장 깊게 잠김.','The deepest part is the 50 m from the shop to the school gate.')},
+    {d:'2027-03-10',who:'teacher',k:'fix',m:B('바랑가이 회의에서 배수로 공사 안건이 올라감. 다음 회의는 4월.','The drainage ditch is on the barangay meeting agenda. Next meeting is in April.')}],
+ 8:[{d:'2027-01-16',who:'teacher',k:'go',go:'no',m:B('난간 없는 쪽으로는 학생 혼자 건너지 말 것. 조사할 때는 다리 입구에서만 볼 것.','Students must not cross alone on the side without a railing. Survey from the bridge entrance only.')}]
+};
+DATA.forEach(p=>{p.cm=SEED_CM[p.id]||[];});
+
+/* ---------- saving: a shared Supabase database (tables: problems, comments). Anyone with this page can read and write.
+   A copy is also kept in this browser so the page still opens when the database cannot be reached. ---------- */
+const DB={url:'https://scuwapqopssndoyjrzze.supabase.co/rest/v1',files:'https://scuwapqopssndoyjrzze.supabase.co/storage/v1/object',key:'sb_publishable__zJmaGtsgJhy8raEbPZfHQ_wOsz75AI'};
+const KEY='village-problem-map-cache-v2';
+let dbOn=false,dirty=false; /* dirty = a change could not be sent to the database */
+const norm=p=>{p.cm=p.cm||[];p.hist=p.hist||[];p.recs=p.recs||[];return p;};
+try{const s=JSON.parse(localStorage.getItem(KEY));if(s&&Array.isArray(s.data)&&s.data.length){DATA=s.data;dirty=!!s.dirty;}}catch(_){}
+DATA.forEach(norm);
+function save(){try{localStorage.setItem(KEY,JSON.stringify({data:DATA,dirty}));}catch(_){}}
+const strip=p=>{const o={...p};delete o.id;delete o.cm;return o;};
+async function api(path,opt={}){
+  const r=await fetch(DB.url+path,{...opt,headers:{apikey:DB.key,'Content-Type':'application/json',...(opt.headers||{})}});
+  if(!r.ok)throw new Error('db '+r.status);
+  return r.json().catch(()=>null);
+}
+async function pull(){
+  const [ps,cs]=await Promise.all([api('/problems?select=id,data&order=id'),api('/comments?select=problem_id,data&order=id')]);
+  const by={},rows=ps.filter(r=>!r.data.del).map(r=>by[r.id]=norm({...r.data,id:r.id,cm:[]}));
+  cs.forEach(c=>{if(by[c.problem_id])by[c.problem_id].cm.push(c.data);});
+  DATA=rows;dbOn=true;save();
+}
+const patch=p=>api('/problems?id=eq.'+p.id,{method:'PATCH',body:JSON.stringify({data:strip(p),updated_at:new Date().toISOString()})});
+/* photos: shrink to 1280px JPEG in the browser (this also drops the camera's embedded GPS data), then upload to the "photos" bucket */
+async function shrink(file){
+  const bmp=await createImageBitmap(file),k=Math.min(1,1280/Math.max(bmp.width,bmp.height)),c=document.createElement('canvas');
+  c.width=Math.round(bmp.width*k);c.height=Math.round(bmp.height*k);c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
+  return new Promise((ok,no)=>c.toBlob(b=>b?ok(b):no(new Error('blob')),'image/jpeg',0.8));
+}
+async function upload(blob){
+  const name=Date.now()+'-'+Math.random().toString(36).slice(2,8)+'.jpg';
+  const r=await fetch(DB.files+'/photos/'+name,{method:'POST',headers:{apikey:DB.key,Authorization:'Bearer '+DB.key,'Content-Type':'image/jpeg'},body:blob});
+  if(!r.ok)throw new Error('upload '+r.status);
+  return DB.files+'/public/photos/'+name;
+}
+const photosOf=p=>(p.photos||[]).filter(x=>x&&typeof x.u==='string'&&x.u.startsWith(DB.files+'/public/photos/'));
+function redraw(){const y=$('panel-body').scrollTop;render();$('panel-body').scrollTop=y;}
+/* send one change; if it fails, keep it in this browser and stop overwriting local data with database data */
+function send(job){job.then(()=>{dbOn=true;},()=>{dirty=true;}).then(()=>{save();drawChrome();drawSheet();});}
+async function refresh(){
+  if(dirty)return;
+  try{await pull();}catch(_){dbOn=false;drawChrome();return;}
+  const a=document.activeElement,typing=a&&$('panel').contains(a)&&/INPUT|TEXTAREA|SELECT/.test(a.tagName);
+  if(S.mode!=='idle'||typing){drawChrome();drawPins();drawSheet();return;}
+  const y=$('panel-body').scrollTop;render();$('panel-body').scrollTop=y;
+}
+/* latest "safe to go?" verdict for a problem: 'ok' | 'care' | 'no' | null */
+const goOf=p=>{const c=p.cm||[];for(let i=c.length-1;i>=0;i--)if(c[i].k==='go')return c[i].go;return null;};
+const flagged=p=>{const g=goOf(p);return g==='care'||g==='no';};
+
+/* ---------- state ---------- */
+const S={lang:'ko',role:'school',cats:new Set(Object.keys(CATS)),openOnly:false,goOnly:false,sel:null,editId:null,mode:'idle',draft:null,sort:{k:'id',dir:1},sat:false,list:false};
+const $=id=>document.getElementById(id);
+const t=k=>T[k][S.lang];
+/* text is stored per language: {ko:'…'} / {en:'…'} / both. If the current language is missing, show the other one. */
+const L_=o=>o==null?'':(typeof o==='string'?o:(o[S.lang]||o.ko||o.en||''));
+const untr=o=>!!o&&typeof o==='object'&&!o[S.lang]&&!!(o.ko||o.en);
+const both=o=>o==null?'':(typeof o==='string'?o:(o.ko||'')+' '+(o.en||''));
+const one=v=>v?{[S.lang]:v}:'';
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad=n=>String(n).padStart(3,'0');
+const isOpen=p=>p.st!=='done';
+const visible=()=>DATA.filter(p=>(S.role==='school'||p.pub)&&S.cats.has(p.cat)&&(!S.openOnly||isOpen(p))&&(!S.goOnly||flagged(p)));
+
+/* ---------- map ---------- */
+const HOME=[11.1090,125.0203];
+let map,layerRoad,layerSat,pins,meLayer,me=null,watchId=null;
+function pinSvg(c,st,w,go){
+  const done=st==='done',hard=st==='hard',draft=st==='draft';
+  const mark=done?`<path d="M9.5 14.2l3.6 3.6 7-7.4" fill="none" stroke="${c}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>`
+    :hard?'<path d="M10.5 9.5l9 9M19.5 9.5l-9 9" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>'
+    :`<circle cx="15" cy="14" r="4.6" fill="${draft?c:'#fff'}"/>`;
+  return `<svg width="${w}" height="${w*4/3}" viewBox="0 0 30 40" aria-hidden="true"><path d="M15 1.5C8 1.5 2.5 7 2.5 14c0 9.3 12.5 24 12.5 24s12.5-14.7 12.5-24C27.5 7 22 1.5 15 1.5z" fill="${done||draft?'#fff':c}" stroke="${done||draft?c:'#fff'}" stroke-width="${done||draft?2.6:1.5}"${draft?' stroke-dasharray="4 3"':''}/>${mark}${
+    go==='no'?'<circle cx="22.5" cy="7.5" r="6.8" fill="#c5221f" stroke="#fff" stroke-width="1.5"/><path d="M18.8 7.5h7.4" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>'
+    :go==='care'?'<circle cx="22.5" cy="7.5" r="6.8" fill="#f9ab00" stroke="#fff" stroke-width="1.5"/><path d="M22.5 4v4.2" stroke="#202124" stroke-width="2.2" stroke-linecap="round"/><circle cx="22.5" cy="11" r="1.2" fill="#202124"/>':''}</svg>`;
+}
+function icon(p,st){
+  return L.divIcon({className:'pin'+(p.id===S.sel?' on':''),html:pinSvg(CATS[p.cat].c,st||p.st,30,goOf(p)),iconSize:[30,40],iconAnchor:[15,38]});
+}
+function initMap(){
+  map=L.map('map',{zoomControl:false,center:HOME,zoom:17,maxZoom:22,minZoom:5});
+  L.control.zoom({position:'bottomright'}).addTo(map);
+  /* Street map: the humanitarian OpenStreetMap style. The main openstreetmap.org tile server refuses pages opened straight from disk, so it is not used. */
+  const ESRI='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+  layerRoad=L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',{subdomains:'abc',maxZoom:22,maxNativeZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, style by <a href="https://www.hotosm.org/">HOT</a>, hosted by OSM France'}).addTo(map);
+  /* If that server blocks or fails, switch to a plainer street map that has no such limits. */
+  let swapped=false;
+  const swap=()=>{if(swapped)return;swapped=true;layerRoad.options.maxNativeZoom=19;layerRoad.setUrl(ESRI);map.attributionControl.removeAttribution(layerRoad.options.attribution);map.attributionControl.addAttribution('Tiles &copy; Esri');};
+  layerRoad.on('tileerror',swap);
+  fetch('https://a.tile.openstreetmap.fr/hot/17/111054/61465.png').then(r=>{if(!r.ok)swap();},swap);
+  layerSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:22,maxNativeZoom:18,attribution:'Imagery &copy; Esri, Maxar, Earthstar Geographics'});
+  meLayer=L.layerGroup().addTo(map);
+  pins=L.layerGroup().addTo(map);
+  map.on('click',e=>{
+    $('results').hidden=true;
+    if(S.mode==='pick'){S.draft={lat:+e.latlng.lat.toFixed(5),lng:+e.latlng.lng.toFixed(5),cat:'water'};S.mode='form';render();const f=$('n-title');if(f)f.focus();}
+    else if(S.mode==='form'){S.draft.lat=+e.latlng.lat.toFixed(5);S.draft.lng=+e.latlng.lng.toFixed(5);drawPins();const c=$('n-coord');if(c)c.textContent=S.draft.lat.toFixed(5)+', '+S.draft.lng.toFixed(5);}
+  });
+}
+/* ---------- my location ---------- */
+function showMe(pos){
+  me={lat:+pos.coords.latitude.toFixed(5),lng:+pos.coords.longitude.toFixed(5)};
+  meLayer.clearLayers();
+  L.circle([me.lat,me.lng],{radius:pos.coords.accuracy||0,color:'#1a73e8',weight:1,fillColor:'#1a73e8',fillOpacity:.12,interactive:false}).addTo(meLayer);
+  L.circleMarker([me.lat,me.lng],{radius:8,color:'#fff',weight:3,fillColor:'#1a73e8',fillOpacity:1,interactive:false}).addTo(meLayer);
+  $('locate').classList.add('on');
+}
+let toastTimer;
+function toast(msg){$('toast').textContent=msg;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{$('toast').hidden=true;},6000);}
+function locate(then){
+  if(!map||!navigator.geolocation){toast(t('locNo'));return;}
+  const b=$('locate');b.classList.add('busy');
+  navigator.geolocation.getCurrentPosition(pos=>{
+    b.classList.remove('busy');showMe(pos);
+    if(watchId==null)watchId=navigator.geolocation.watchPosition(showMe,()=>{},{enableHighAccuracy:true});
+    then();
+  },err=>{b.classList.remove('busy');toast(t(err.code===1?'locDenied':'locFail'));},{enableHighAccuracy:true,timeout:15000,maximumAge:10000});
+}
+function drawPins(){
+  if(!map)return;
+  pins.clearLayers();
+  visible().filter(p=>!(S.mode==='form'&&p.id===S.editId)).forEach(p=>{
+    const m=L.marker([p.lat,p.lng],{icon:icon(p),keyboard:true,title:pad(p.id)+' '+L_(p.title)+' · '+L_(ST[p.st])+(flagged(p)?' · '+t(CG[goOf(p)]):''),zIndexOffset:p.id===S.sel?1000:0});
+    m.on('click',()=>{if(S.mode==='pick')return;select(p.id);});
+    pins.addLayer(m);
+  });
+  if(S.draft)pins.addLayer(L.marker([S.draft.lat,S.draft.lng],{icon:icon({id:-1,cat:S.draft.cat},'draft'),interactive:false,zIndexOffset:2000}));
+  $('map').classList.toggle('pick',S.mode==='pick');
+}
+function reveal(p,zoom){
+  if(!map)return;
+  const wide=window.innerWidth>900;
+  if(zoom)map.setView([p.lat,p.lng],Math.max(map.getZoom(),zoom),{animate:false});
+  map.panInside([p.lat,p.lng],{paddingTopLeft:wide?[440,120]:[30,150],paddingBottomRight:wide?[80,80]:[30,window.innerHeight*0.6+20]});
+}
+
+/* ---------- panel ---------- */
+const pill=s=>`<span class="pill ${s}">${esc(L_(ST[s]))}</span>`;
+const goPill=g=>g?`<span class="pill g-${g}">${t(CG[g])}</span>`:'';
+const catTag=k=>`<span class="cat" style="--c:${CATS[k].c}"><i></i>${esc(L_(CATS[k]))}</span>`;
+const IC={
+ pin:'<svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7m0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5"/></svg>',
+ cal:'<svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2m0 16H5V9h14z"/></svg>',
+ user:'<svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8m0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4"/></svg>',
+ clock:'<svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20m4.2 14.2L11 13V7h1.5v5.2l4.5 2.7z"/></svg>',
+ group:'<svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M16 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6m0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13m8 0c-.29 0-.62.02-.97.05A4.2 4.2 0 0 1 17 16.5V19h6v-2.5c0-2.33-4.67-3.5-7-3.5"/></svg>',
+ lock:'<svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M18 8h-1V6A5 5 0 0 0 7 6v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2M9 6a3 3 0 0 1 6 0v2H9zm3 11a2 2 0 1 1 0-4 2 2 0 0 1 0 4"/></svg>',
+ edit:'<svg width="18" height="18" viewBox="0 0 24 24"><path fill="#fff" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75z"/></svg>',
+ zoom:'<svg width="18" height="18" viewBox="0 0 24 24"><path fill="#1a73e8" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14m.5-7H9v2H7v1h2v2h1v-2h2V9h-2z"/></svg>',
+ cm:'<svg width="18" height="18" viewBox="0 0 24 24"><path fill="#1a73e8" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2m0 14H5.17L4 17.17V4h16z"/></svg>',
+ copy:'<svg width="18" height="18" viewBox="0 0 24 24"><path fill="#1a73e8" d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H8V7h11z"/></svg>'
+};
+function panelDetail(p){
+  const school=S.role==='school',c=CATS[p.cat].c;
+  const cms=p.cm.slice().reverse(),ph=photosOf(p);
+  const anyUntr=['title','desc','since','aff'].some(k=>untr(p[k]));
+  return `<div class="hero" style="--c:${c}">No. ${pad(p.id)} · ${esc(L_(CATS[p.cat]))}</div>
+  <div class="sec"><h2>${esc(L_(p.title))}</h2><div class="rowline">${pill(p.st)}${goPill(goOf(p))}</div><p>${esc(L_(p.desc))}</p>${anyUntr?`<span class="hint">${t('untrHint')}${school?' '+t('untrHow'):''}</span>`:''}</div>
+  <div class="acts">
+   ${school?`<button type="button" class="act main" data-act="edit"><span class="ic">${IC.edit}</span>${t('update')}</button>`:''}
+   <button type="button" class="act" data-act="zoom"><span class="ic">${IC.zoom}</span>${t('zoomTo')}</button>
+   <button type="button" class="act" data-act="cm"><span class="ic">${IC.cm}</span>${t('comments')}${p.cm.length?' '+p.cm.length:''}</button>
+   <button type="button" class="act" data-act="copy"><span class="ic">${IC.copy}</span><span id="copy-l">${t('copy')}</span></button>
+  </div>
+  <div class="sec"><dl class="info">
+   <dt>${IC.pin}</dt><dd class="num">${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}<small>${t('coord')}</small></dd>
+   <dt>${IC.cal}</dt><dd class="num">${p.date}<small>${t('date')}</small></dd>
+   <dt>${IC.user}</dt><dd>${esc(L_(WHO[p.who]))}<small>${t('who')}</small></dd>
+   ${L_(p.since)?`<dt>${IC.clock}</dt><dd>${esc(L_(p.since))}<small>${t('since')}</small></dd>`:''}
+   ${L_(p.aff)?`<dt>${IC.group}</dt><dd>${esc(L_(p.aff))}<small>${t('affected')}</small></dd>`:''}
+   <dt>${IC.lock}</dt><dd>${p.pub?t('pub'):t('priv')}<small>${t('vis')}</small></dd>
+  </dl></div>
+  ${school||ph.length?`<div class="sec" id="ph-sec"><h3>${t('photos')}</h3>
+   ${ph.length?`<div class="photos">${ph.map((x,i)=>`<div class="ph"><a href="${esc(x.u)}" target="_blank" rel="noopener"><img src="${esc(x.u)}" alt="${t('photos')} ${i+1}" loading="lazy"></a>${school?`<button type="button" data-act="rmphoto" data-u="${esc(x.u)}" aria-label="${t('rmPhoto')}" title="${t('rmPhoto')}">×</button>`:''}</div>`).join('')}</div>`:''}
+   ${school?`<label class="btn filebtn"><input type="file" id="ph-file" accept="image/*">${t('addPhoto')}</label><span class="hint" id="ph-msg">${t('photoHint')}</span>`:''}</div>`:''}
+  <div class="sec"><h3>${t('history')}</h3><ul class="tl">${p.hist.map(h=>`<li><span class="d num">${h.d}</span><b>${esc(L_(ST[h.s]))}</b><br>${esc(L_(h.m))}</li>`).join('')}</ul></div>
+  ${p.recs.length?`<div class="sec"><h3>${t('records')}</h3><ul class="recs">${p.recs.map(r=>`<li><span class="k">${t(r.k)}</span>${esc(L_(r.t))}</li>`).join('')}</ul></div>`:''}
+  <div class="sec" id="cm-sec"><h3>${t('comments')} <span class="sub num">${p.cm.length}</span></h3>
+   ${cms.length?`<ul class="cms">${cms.map(x=>`<li><div class="rowline"><span class="pill rec">${t(CK[x.k])}</span>${x.k==='go'?goPill(x.go):''}<span class="meta num">${x.d} · ${esc(L_(WHO[x.who]))}${untr(x.m)?' · '+t('orig'):''}</span></div><p>${esc(L_(x.m))}</p></li>`).join('')}</ul>`:`<span class="hint">${t('cmNone')}</span>`}
+   ${school?`<form class="stack" id="cmf">
+    <div class="two">
+     <label class="f">${t('cmKind')}<select id="c-k">${Object.keys(CK).map(k=>`<option value="${k}">${t(CK[k])}</option>`).join('')}</select></label>
+     <label class="f">${t('who')}<select id="c-who">${Object.keys(WHO).map(k=>`<option value="${k}">${esc(L_(WHO[k]))}</option>`).join('')}</select></label>
+    </div>
+    <label class="f" id="c-go-l" hidden>${t('goQ')}<select id="c-go">${Object.keys(CG).map(k=>`<option value="${k}">${t(CG[k])}</option>`).join('')}</select></label>
+    <label class="f">${t('cmText')}<textarea id="c-m" maxlength="300"></textarea></label>
+    <span class="hint">${t('fPrivacy')}</span>
+    <span class="err" id="c-err" role="alert"></span>
+    <div><button class="btn primary" type="submit">${t('cmAdd')}</button></div>
+   </form>`:`<span class="hint">${t('cmPublic')}</span>`}</div>
+  ${school?`<div class="sec" id="upd-sec"><h3>${t('update')}</h3>
+   <form class="stack" id="upd">
+    <label class="f">${t('status')}<select id="u-st">${Object.keys(ST).map(k=>`<option value="${k}"${k===p.st?' selected':''}>${esc(L_(ST[k]))}</option>`).join('')}</select></label>
+    <label class="f"><span id="u-memo-l">${t('memo')}</span><textarea id="u-memo"></textarea></label>
+    <label class="check"><input type="checkbox" id="u-pub"${p.pub?' checked':''}> ${t('makePub')}</label>
+    <span class="hint">${t('teacherOnly')}</span>
+    <span class="err" id="u-err" role="alert"></span>
+    <div><button class="btn primary" type="submit">${t('save')}</button></div>
+   </form></div>
+  <div class="sec"><h3>${t('manage')}</h3>
+   <div class="rowline"><button type="button" class="btn" data-act="editrec">${t('editRec')}</button><button type="button" class="btn danger" data-act="del">${t('del')}</button></div>
+   <span class="hint">${t('delHint')}</span></div>`:''}`;
+}
+function panelForm(){
+  const d=S.draft,p=S.editId!=null?DATA.find(x=>x.id===S.editId):null;
+  const val=k=>{const o=p&&p[k];return esc(typeof o==='string'?o:(o&&o[S.lang])||'');};
+  const ph=k=>p&&untr(p[k])?` placeholder="${esc(L_(p[k]))}"`:'';
+  const anyUntr=p&&['title','desc','since','aff'].some(k=>untr(p[k]));
+  return `<div class="hero" style="--c:#1a73e8">${p?t('editTitle')+' · No. '+pad(p.id):t('newTitle')}</div>
+  <div class="sec"><span class="num" id="n-coord">${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}</span><span class="hint">${t('moveHint')}</span></div>
+  <div class="sec"><form class="stack" id="newf">
+    <label class="f">${t('fTitle')}<input id="n-title" maxlength="60" autocomplete="off" value="${val('title')}"${ph('title')}></label>
+    <div class="two">
+     <label class="f">${t('kind')}<select id="n-cat">${Object.keys(CATS).map(k=>`<option value="${k}"${k===d.cat?' selected':''}>${esc(L_(CATS[k]))}</option>`).join('')}</select></label>
+     <label class="f">${t('who')}<select id="n-who">${Object.keys(WHO).map(k=>`<option value="${k}"${p&&k===p.who?' selected':''}>${esc(L_(WHO[k]))}</option>`).join('')}</select></label>
+    </div>
+    <label class="f">${t('fDesc')}<textarea id="n-desc" maxlength="300"${ph('desc')}>${val('desc')}</textarea></label>
+    <div class="two">
+     <label class="f">${t('fSince')}<input id="n-since" maxlength="40" autocomplete="off" value="${val('since')}"${ph('since')}></label>
+     <label class="f">${t('fAff')}<input id="n-aff" maxlength="60" autocomplete="off" value="${val('aff')}"${ph('aff')}></label>
+    </div>
+    ${anyUntr?`<span class="hint">${t('trHint')}</span>`:''}
+    <span class="hint">${t('fPrivacy')}</span>
+    <span class="err" id="n-err" role="alert"></span>
+    <div class="rowline"><button class="btn primary" type="submit">${t('save')}</button><button class="btn" type="button" data-act="cancel">${t('cancel')}</button></div>
+  </form></div>`;
+}
+function drawPanel(){
+  const p=DATA.find(x=>x.id===S.sel),ok=p&&(S.role==='school'||p.pub);
+  const open=S.mode==='form'||!!ok;
+  $('panel').hidden=!open;document.body.classList.toggle('panel-open',open);
+  if(!open){$('panel-body').innerHTML='';return;}
+  $('panel-body').innerHTML=S.mode==='form'?panelForm():panelDetail(p);
+  $('panel-body').scrollTop=0;
+  const cat=$('n-cat');if(cat)cat.onchange=()=>{S.draft.cat=cat.value;drawPins();};
+  const st=$('u-st');if(st){const f=()=>{$('u-memo-l').textContent=st.value==='hard'?t('memoHard'):t('memo');};st.onchange=f;f();}
+  const ck=$('c-k');if(ck){const f=()=>{$('c-go-l').hidden=ck.value!=='go';};ck.onchange=f;f();}
+}
+
+/* ---------- list + stats ---------- */
+function drawSheet(){
+  $('scrim').hidden=!S.list;if(!S.list)return;
+  const v=visible(),n=v.length,done=v.filter(p=>p.st==='done').length,pct=n?Math.round(done/n*100):0;
+  const max=Math.max(1,...Object.keys(CATS).map(k=>v.filter(p=>p.cat===k).length));
+  $('sheet-h').textContent=t('list');$('sheet-close').textContent=t('close');$('sheet-reset').textContent=t('reset');$('sheet-reset').hidden=dbOn&&!dirty;
+  $('stats').innerHTML=`
+   <div class="stat"><h3>${t('rate')}</h3><div class="big num"><div><b>${pct}%</b><span>${done} / ${n} ${t('solved')}</span></div><div><b>${n}</b><span>${t('total')}</span></div></div>
+    <div class="meter" role="img" aria-label="${pct}%"><i style="width:${pct}%"></i></div></div>
+   <div class="stat"><h3>${t('byKind')}</h3>
+    ${Object.keys(CATS).filter(k=>S.cats.has(k)).map(k=>{const a=v.filter(p=>p.cat===k),o=a.filter(isOpen).length;
+      const cell=cls=>`<i class="${cls}" style="width:${100/max}%"></i>`;
+      return `<div class="cbar" style="--c:${CATS[k].c}"><span>${esc(L_(CATS[k]))}</span><span class="track">${cell('').repeat(o)}${cell('solved').repeat(a.length-o)}</span><span class="n num">${a.length}</span></div>`;}).join('')}
+    <span class="hint">${t('barNote')}</span></div>
+   <div class="stat"><h3>${t('byStatus')}</h3>${Object.keys(ST).map(k=>`<div class="srow">${pill(k)}<span class="num">${v.filter(p=>p.st===k).length}</span></div>`).join('')}</div>`;
+  const cols=[['id','thId'],['title','thTitle'],['cat','kind'],['date','date'],['st','status'],['pub','vis']];
+  const order=Object.keys(ST);
+  const key=p=>({id:p.id,title:L_(p.title),cat:L_(CATS[p.cat]),date:p.date,st:order.indexOf(p.st),pub:p.pub?0:1}[S.sort.k]);
+  const rows=v.slice().sort((a,b)=>{const x=key(a),y=key(b);return (x<y?-1:x>y?1:a.id-b.id)*S.sort.dir;});
+  const arrow=k=>S.sort.k===k?(S.sort.dir>0?' ▲':' ▼'):'';
+  $('table').innerHTML=`<thead><tr>${cols.map(([k,l])=>`<th aria-sort="${S.sort.k===k?(S.sort.dir>0?'ascending':'descending'):'none'}"><button type="button" data-sort="${k}">${t(l)}${arrow(k)}</button></th>`).join('')}</tr></thead>
+   <tbody>${rows.length?rows.map(p=>`<tr data-id="${p.id}" tabindex="0"><td class="num">${pad(p.id)}</td><td class="t">${esc(L_(p.title))}<span class="sub">${esc(L_(p.desc))}</span></td><td>${catTag(p.cat)}</td><td class="num">${p.date}</td><td>${pill(p.st)} ${flagged(p)?goPill(goOf(p)):''}</td><td>${p.pub?t('pub'):t('priv')}</td></tr>`).join('')
+    :`<tr><td colspan="6">${t('none')}</td></tr>`}</tbody>`;
+}
+
+/* ---------- chrome ---------- */
+function drawChrome(){
+  document.documentElement.lang=S.lang;
+  $('q').placeholder=t('search');$('q').setAttribute('aria-label',t('search'));
+  $('open-list').textContent=t('list');
+  $('r-school').textContent=t('rSchool');$('r-public').textContent=t('rPublic');
+  const press=(id,on)=>$(id).setAttribute('aria-pressed',on);
+  press('r-school',S.role==='school');press('r-public',S.role==='public');press('l-ko',S.lang==='ko');press('l-en',S.lang==='en');
+  $('add-l').textContent=t('add');$('add').hidden=S.role!=='school'||S.mode!=='idle';
+  $('pickbar').hidden=S.mode!=='pick';$('pickmsg').textContent=t('pickMsg');$('pick-cancel').textContent=t('cancel');$('pick-here').textContent=t('here');
+  $('locate').setAttribute('aria-label',t('myLoc'));$('locate').title=t('myLoc');
+  $('panel-close').setAttribute('aria-label',t('close'));
+  $('layer').className='layerbtn '+(S.sat?'road':'sat');$('layer-l').textContent=S.sat?t('road'):t('sat');
+  $('notice').textContent=(S.role==='school'?t('nSchool'):t('nPublic'))+' · '+(dirty?t('dbDirty'):dbOn?t('savedDb'):t('dbOff'));
+  $('chips').innerHTML=Object.keys(CATS).map(k=>`<button type="button" class="chip" data-cat="${k}" aria-pressed="${S.cats.has(k)}" style="--c:${CATS[k].c}"><i></i>${esc(L_(CATS[k]))}</button>`).join('')
+    +`<button type="button" class="chip t" id="open-only" aria-pressed="${S.openOnly}">${t('openOnly')}</button>`
+    +`<button type="button" class="chip t" id="go-only" aria-pressed="${S.goOnly}">${t('goOnly')}</button>`;
+  const c='#1a73e8';
+  $('legend').innerHTML=`<span>${pinSvg(c,'rec',15)}${t('lgFill')}</span><span>${pinSvg(c,'done',15)}${t('lgRing')}</span><span>${pinSvg(c,'hard',15)}${t('lgX')}</span><span>${pinSvg(c,'rec',15,'care')}${t('lgCare')}</span><span>${pinSvg(c,'rec',15,'no')}${t('lgNo')}</span>`;
+}
+function render(){drawChrome();drawPins();drawPanel();drawSheet();}
+
+/* ---------- actions ---------- */
+function select(id){S.sel=id;S.mode='idle';S.draft=null;S.editId=null;S.list=false;render();const p=DATA.find(x=>x.id===id);if(p)reveal(p);}
+function closePanel(){S.sel=null;S.mode='idle';S.draft=null;S.editId=null;render();}
+$('panel-close').onclick=closePanel;
+$('pick-cancel').onclick=closePanel;
+$('locate').onclick=()=>locate(()=>map.setView([me.lat,me.lng],Math.max(map.getZoom(),18)));
+$('pick-here').onclick=()=>locate(()=>{
+  if(S.mode!=='pick')return;
+  S.draft={lat:me.lat,lng:me.lng,cat:'water'};S.mode='form';render();
+  map.setView([me.lat,me.lng],Math.max(map.getZoom(),18),{animate:false});reveal(S.draft);
+  const f=$('n-title');if(f)f.focus();
+});
+$('r-school').onclick=()=>{S.role='school';render();};
+$('r-public').onclick=()=>{S.role='public';S.mode='idle';S.draft=null;S.editId=null;render();};
+$('l-ko').onclick=()=>{S.lang='ko';render();};
+$('l-en').onclick=()=>{S.lang='en';render();};
+$('add').onclick=()=>{S.sel=null;S.draft=null;S.editId=null;S.mode='pick';render();};
+$('open-list').onclick=()=>{S.list=true;render();$('sheet-close').focus();};
+$('sheet-close').onclick=()=>{S.list=false;render();};
+$('sheet-reset').onclick=()=>{if(!confirm(t('resetQ')))return;try{localStorage.removeItem(KEY);}catch(_){}location.reload();};
+$('scrim').addEventListener('click',e=>{if(e.target===$('scrim')){S.list=false;render();}});
+document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(S.list){S.list=false;render();}else if(!$('results').hidden)$('results').hidden=true;else if(S.mode!=='idle'||S.sel!=null)closePanel();});
+$('layer').onclick=()=>{S.sat=!S.sat;if(map){map.removeLayer(S.sat?layerRoad:layerSat);map.addLayer(S.sat?layerSat:layerRoad);}drawChrome();};
+$('chips').onclick=e=>{
+  const c=e.target.closest('[data-cat]');
+  if(c){const k=c.dataset.cat;S.cats.has(k)?S.cats.delete(k):S.cats.add(k);render();return;}
+  if(e.target.closest('#open-only')){S.openOnly=!S.openOnly;render();}
+  if(e.target.closest('#go-only')){S.goOnly=!S.goOnly;render();}
+};
+function search(){
+  const q=$('q').value.trim().toLowerCase();$('q-clear').hidden=!q;
+  if(!q){$('results').hidden=true;return;}
+  const hits=DATA.filter(p=>(S.role==='school'||p.pub)&&[both(p.title),both(p.desc),CATS[p.cat].ko,CATS[p.cat].en,pad(p.id)].join(' ').toLowerCase().includes(q)).slice(0,6);
+  $('results').innerHTML=hits.length?hits.map(p=>`<button type="button" data-id="${p.id}">${pinSvg(CATS[p.cat].c,p.st,18)}<span>${esc(L_(p.title))}<span class="sub">${esc(L_(CATS[p.cat]))} · ${esc(L_(ST[p.st]))}</span></span></button>`).join(''):`<div class="empty">${t('none')}</div>`;
+  $('results').hidden=false;
+}
+$('q').addEventListener('input',search);$('q').addEventListener('focus',search);
+$('q-clear').onclick=()=>{$('q').value='';search();$('q').focus();};
+$('results').onclick=e=>{const b=e.target.closest('[data-id]');if(!b)return;const p=DATA.find(x=>x.id===+b.dataset.id);$('results').hidden=true;S.cats.add(p.cat);if(!isOpen(p))S.openOnly=false;if(!flagged(p))S.goOnly=false;select(p.id);reveal(p,17);};
+$('panel-body').addEventListener('click',e=>{
+  const a=e.target.closest('[data-act]');if(!a)return;
+  const p=DATA.find(x=>x.id===S.sel);
+  if(a.dataset.act==='cancel'){if(S.editId!=null)select(S.editId);else closePanel();return;}
+  if(a.dataset.act==='editrec'&&p){S.editId=p.id;S.draft={lat:p.lat,lng:p.lng,cat:p.cat};S.mode='form';render();return;}
+  if(a.dataset.act==='del'&&p){if(!confirm(t('delQ')))return;p.del=true;send(patch(p));DATA=DATA.filter(x=>x!==p);save();closePanel();return;}
+  if(a.dataset.act==='rmphoto'&&p){p.photos=(p.photos||[]).filter(x=>x.u!==a.dataset.u);save();send(patch(p));redraw();return;}
+  if(a.dataset.act==='zoom'&&p)reveal(p,19);
+  if(a.dataset.act==='cm'){$('cm-sec').scrollIntoView({behavior:'smooth'});const f=$('c-m');if(f)f.focus({preventScroll:true});}
+  if(a.dataset.act==='edit'){$('upd-sec').scrollIntoView({behavior:'smooth'});$('u-st').focus({preventScroll:true});}
+  if(a.dataset.act==='copy'&&p){const s=p.lat.toFixed(5)+', '+p.lng.toFixed(5);const ok=()=>{$('copy-l').textContent=t('copied');};try{navigator.clipboard.writeText(s).then(ok,()=>{});}catch(_){}}
+});
+$('panel-body').addEventListener('change',async e=>{
+  if(e.target.id!=='ph-file')return;
+  const file=e.target.files[0],id=S.sel;if(!file)return;
+  $('ph-msg').textContent=t('uploading');
+  try{
+    const u=await upload(await shrink(file)),p=DATA.find(x=>x.id===id);if(!p)return;
+    p.photos=(p.photos||[]).concat({u,d:new Date().toISOString().slice(0,10)});save();send(patch(p));
+    if(S.sel===id&&S.mode==='idle')redraw();
+  }catch(_){const m=$('ph-msg');if(m){m.textContent=t('upFail');m.className='err';}}
+});
+$('panel-body').addEventListener('submit',e=>{
+  e.preventDefault();
+  const today=new Date().toISOString().slice(0,10);
+  if(e.target.id==='upd'){
+    const p=DATA.find(x=>x.id===S.sel),st=$('u-st').value,memo=$('u-memo').value.trim();
+    if(st==='hard'&&st!==p.st&&!memo){$('u-err').textContent=t('errHard');$('u-memo').focus();return;}
+    if(st!==p.st||memo){p.st=st;p.hist.push({d:today,s:st,m:memo?one(memo):{ko:ST[st].ko,en:ST[st].en}});}
+    p.pub=$('u-pub').checked;save();send(patch(p));render();
+  }
+  if(e.target.id==='cmf'){
+    const p=DATA.find(x=>x.id===S.sel),m=$('c-m').value.trim(),k=$('c-k').value;
+    if(!m){$('c-err').textContent=t('errCm');$('c-m').focus();return;}
+    const c={d:today,who:$('c-who').value,k,m:one(m)};if(k==='go')c.go=$('c-go').value;
+    p.cm.push(c);save();send(api('/comments',{method:'POST',body:JSON.stringify({problem_id:p.id,data:c})}));if(S.goOnly&&!flagged(p))S.goOnly=false;render();$('cm-sec').scrollIntoView();
+  }
+  if(e.target.id==='newf'){
+    const title=$('n-title').value.trim(),f=id=>$(id).value.trim();
+    const ep=S.editId!=null?DATA.find(x=>x.id===S.editId):null;
+    if(!title&&!(ep&&untr(ep.title))){$('n-err').textContent=t('errTitle');$('n-title').focus();return;}
+    const cat=$('n-cat').value,btn=e.target.querySelector('[type=submit]');
+    if(ep){
+      /* keep the other language's text; only this language's text is replaced */
+      const setL=(k,v)=>{const o=ep[k],n=o&&typeof o==='object'?{...o}:{};if(v)n[S.lang]=v;else delete n[S.lang];ep[k]=Object.keys(n).length?n:'';};
+      setL('title',title);setL('desc',f('n-desc'));setL('since',f('n-since'));setL('aff',f('n-aff'));
+      ep.cat=cat;ep.who=$('n-who').value;ep.lat=S.draft.lat;ep.lng=S.draft.lng;
+      save();send(patch(ep));S.cats.add(cat);select(ep.id);return;
+    }
+    const row={cat,lat:S.draft.lat,lng:S.draft.lng,date:today,who:$('n-who').value,st:'rec',pub:false,title:one(title),
+      desc:one(f('n-desc')),since:one(f('n-since')),aff:one(f('n-aff')),hist:[{d:today,s:'rec',m:T.created}],recs:[]};
+    btn.disabled=true;
+    /* the database hands out the number, so two devices never get the same one */
+    api('/problems',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({data:row})})
+     .then(r=>{dbOn=true;return r[0].id;},()=>{dirty=true;return Math.max(0,...DATA.map(p=>p.id))+1;})
+     .then(id=>{DATA.push({...row,id,cm:[]});S.cats.add(cat);S.goOnly=false;save();select(id);});
+  }
+});
+$('table').addEventListener('click',e=>{
+  const s=e.target.closest('[data-sort]');
+  if(s){const k=s.dataset.sort;S.sort=S.sort.k===k?{k,dir:-S.sort.dir}:{k,dir:1};drawSheet();return;}
+  const r=e.target.closest('tr[data-id]');if(r){const p=DATA.find(x=>x.id===+r.dataset.id);select(p.id);reveal(p,17);}
+});
+$('table').addEventListener('keydown',e=>{if(e.key==='Enter'){const r=e.target.closest('tr[data-id]');if(r&&e.target===r)r.click();}});
+
+if(window.L)initMap();else $('map').innerHTML='<div class="offline">'+T.offline.ko+'<br>'+T.offline.en+'</div>';
+render();
+refresh();setInterval(refresh,60000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+</script>
+</body>
+</html>
