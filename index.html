@@ -490,15 +490,20 @@ function icon(p,st){
 function initMap(){
   map=L.map('map',{zoomControl:false,center:HOME,zoom:17,maxZoom:22,minZoom:5});
   L.control.zoom({position:'bottomright'}).addTo(map);
-  /* Street map: the humanitarian OpenStreetMap style. The main openstreetmap.org tile server refuses pages opened straight from disk, so it is not used. */
+  /* Street map. On the web: the standard OpenStreetMap tiles, which come from a fast worldwide network.
+     That server refuses pages opened straight from disk (file://), so there the slower humanitarian style is used instead. */
   const ESRI='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
-  layerRoad=L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',{subdomains:'abc',keepBuffer:4,updateWhenIdle:false,maxZoom:22,maxNativeZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, style by <a href="https://www.hotosm.org/">HOT</a>, hosted by OSM France'}).addTo(map);
-  /* If that server blocks or fails, switch to a plainer street map that has no such limits. */
-  let swapped=false;
-  const swap=()=>{if(swapped)return;swapped=true;layerRoad.options.maxNativeZoom=19;layerRoad.setUrl(ESRI);map.attributionControl.removeAttribution(layerRoad.options.attribution);map.attributionControl.addAttribution('Tiles &copy; Esri');};
-  layerRoad.on('tileerror',swap);
-  fetch('https://a.tile.openstreetmap.fr/hot/17/111054/61465.png').then(r=>{if(!r.ok)swap();},swap);
-  layerSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{keepBuffer:4,updateWhenIdle:false,maxZoom:22,maxNativeZoom:18,attribution:'Imagery &copy; Esri, Maxar, Earthstar Geographics'});
+  const web=location.protocol.startsWith('http');
+  const OSM_ATTR='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  layerRoad=web
+    ?L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:22,maxNativeZoom:19,attribution:OSM_ATTR}).addTo(map)
+    :L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',{subdomains:'abc',maxZoom:22,maxNativeZoom:19,attribution:OSM_ATTR+', style by <a href="https://www.hotosm.org/">HOT</a>, hosted by OSM France'}).addTo(map);
+  /* If that server blocks, fails, or takes more than 5 seconds to answer, switch to a plainer street map on a fast server. */
+  let swapped=false,answered=false;
+  const swap=()=>{if(swapped)return;swapped=true;layerRoad.setUrl(ESRI);map.attributionControl.removeAttribution(layerRoad.options.attribution);map.attributionControl.addAttribution('Tiles &copy; Esri');};
+  layerRoad.on('tileerror',swap);layerRoad.once('tileload',()=>{answered=true;});
+  setTimeout(()=>{if(!answered)swap();},5000);
+  layerSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:22,maxNativeZoom:18,attribution:'Imagery &copy; Esri, Maxar, Earthstar Geographics'});
   meLayer=L.layerGroup().addTo(map);
   pins=L.layerGroup().addTo(map);
   map.on('click',e=>{
