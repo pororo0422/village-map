@@ -420,7 +420,7 @@ async function pull(){
   const [ps,cs]=await Promise.all([api('/problems?select=id,data&order=id'),api('/comments?select=problem_id,data&order=id')]);
   const by={},rows=ps.filter(r=>!r.data.del).map(r=>by[r.id]=norm({...r.data,id:r.id,cm:[]}));
   cs.forEach(c=>{if(by[c.problem_id])by[c.problem_id].cm.push(c.data);});
-  DATA=rows;dbOn=true;save();
+  return rows;
 }
 const patch=p=>api('/problems?id=eq.'+p.id,{method:'PATCH',body:JSON.stringify({data:strip(p),updated_at:new Date().toISOString()})});
 /* photos: shrink to 1280px JPEG in the browser (this also drops the camera's embedded GPS data), then upload to the "photos" bucket */
@@ -438,13 +438,21 @@ async function upload(blob){
 const photosOf=p=>(p.photos||[]).filter(x=>x&&typeof x.u==='string'&&x.u.startsWith(DB.files+'/public/photos/'));
 function redraw(){const y=$('panel-body').scrollTop;render();$('panel-body').scrollTop=y;}
 /* send one change; if it fails, keep it in this browser and stop overwriting local data with database data */
-function send(job){job.then(()=>{dbOn=true;},()=>{dirty=true;}).then(()=>{save();drawChrome();drawSheet();});}
+let sig='',ver=0,pending=0,pulling=false; /* ver counts local changes, so a slow download never overwrites a newer local change */
+function send(job){ver++;pending++;job.then(()=>{dbOn=true;},()=>{dirty=true;}).then(()=>{pending--;save();drawChrome();drawSheet();});}
+/* Checks the database every few seconds. The screen is redrawn only when something actually changed. */
 async function refresh(){
-  if(dirty)return;
-  try{await pull();}catch(_){dbOn=false;drawChrome();return;}
+  if(dirty||pending||pulling||document.hidden)return;
+  pulling=true;const v=ver;let rows;
+  try{rows=await pull();}catch(_){pulling=false;if(dbOn){dbOn=false;drawChrome();}return;}
+  pulling=false;
+  if(v!==ver||pending)return;
+  const was=dbOn,n=JSON.stringify(rows);dbOn=true;
+  if(n===sig){if(!was)drawChrome();return;}
+  sig=n;DATA=rows;save();
   const a=document.activeElement,typing=a&&$('panel').contains(a)&&/INPUT|TEXTAREA|SELECT/.test(a.tagName);
   if(S.mode!=='idle'||typing){drawChrome();drawPins();drawSheet();return;}
-  const y=$('panel-body').scrollTop;render();$('panel-body').scrollTop=y;
+  redraw();
 }
 /* latest "safe to go?" verdict for a problem: 'ok' | 'care' | 'no' | null */
 const goOf=p=>{const c=p.cm||[];for(let i=c.length-1;i>=0;i--)if(c[i].k==='go')return c[i].go;return null;};
@@ -484,13 +492,13 @@ function initMap(){
   L.control.zoom({position:'bottomright'}).addTo(map);
   /* Street map: the humanitarian OpenStreetMap style. The main openstreetmap.org tile server refuses pages opened straight from disk, so it is not used. */
   const ESRI='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
-  layerRoad=L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',{subdomains:'abc',maxZoom:22,maxNativeZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, style by <a href="https://www.hotosm.org/">HOT</a>, hosted by OSM France'}).addTo(map);
+  layerRoad=L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',{subdomains:'abc',keepBuffer:4,updateWhenIdle:false,maxZoom:22,maxNativeZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, style by <a href="https://www.hotosm.org/">HOT</a>, hosted by OSM France'}).addTo(map);
   /* If that server blocks or fails, switch to a plainer street map that has no such limits. */
   let swapped=false;
   const swap=()=>{if(swapped)return;swapped=true;layerRoad.options.maxNativeZoom=19;layerRoad.setUrl(ESRI);map.attributionControl.removeAttribution(layerRoad.options.attribution);map.attributionControl.addAttribution('Tiles &copy; Esri');};
   layerRoad.on('tileerror',swap);
   fetch('https://a.tile.openstreetmap.fr/hot/17/111054/61465.png').then(r=>{if(!r.ok)swap();},swap);
-  layerSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:22,maxNativeZoom:18,attribution:'Imagery &copy; Esri, Maxar, Earthstar Geographics'});
+  layerSat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{keepBuffer:4,updateWhenIdle:false,maxZoom:22,maxNativeZoom:18,attribution:'Imagery &copy; Esri, Maxar, Earthstar Geographics'});
   meLayer=L.layerGroup().addTo(map);
   pins=L.layerGroup().addTo(map);
   map.on('click',e=>{
@@ -780,7 +788,7 @@ $('panel-body').addEventListener('submit',e=>{
     /* the database hands out the number, so two devices never get the same one */
     api('/problems',{method:'POST',headers:{Prefer:'return=representation'},body:JSON.stringify({data:row})})
      .then(r=>{dbOn=true;return r[0].id;},()=>{dirty=true;return Math.max(0,...DATA.map(p=>p.id))+1;})
-     .then(id=>{DATA.push({...row,id,cm:[]});S.cats.add(cat);S.goOnly=false;save();select(id);});
+     .then(id=>{ver++;DATA.push({...row,id,cm:[]});S.cats.add(cat);S.goOnly=false;save();select(id);});
   }
 });
 $('table').addEventListener('click',e=>{
@@ -792,7 +800,7 @@ $('table').addEventListener('keydown',e=>{if(e.key==='Enter'){const r=e.target.c
 
 if(window.L)initMap();else $('map').innerHTML='<div class="offline">'+T.offline.ko+'<br>'+T.offline.en+'</div>';
 render();
-refresh();setInterval(refresh,60000);
+refresh();setInterval(refresh,4000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
 </script>
 </body>
