@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>우리 마을 물 지도</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout idea: the same full-screen map app as the village problem map. Floating search and chips on top,
+   a place panel on the left (a bottom sheet on phones), round controls in the corners. */
+:root{
+  --surface:#ffffff; --ink:#202124; --muted:#5f6368; --line:#dadce0; --hover:#f1f3f4;
+  --blue:#1a73e8; --blue-soft:#e8f0fe;
+  --ok:#188038; --warn:#b06000; --crit:#c5221f;
+  --series:#bb7234; --rain:#1a73e8; --grid:#e8eaed; --axis:#dadce0;
+  --shadow:0 1px 2px rgba(60,64,67,.3),0 2px 6px 2px rgba(60,64,67,.15);
+  --f:"Roboto","Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --mono:"Roboto Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font-family:var(--f);font-size:14px;line-height:1.5;color:var(--ink);background:#e8eaed;overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+[hidden]{display:none!important}
+.num{font-variant-numeric:tabular-nums}
+#map{position:absolute;inset:0;z-index:0;background:#e8eaed}
+#map.pick,#map.pick .leaflet-interactive{cursor:crosshair}
+.leaflet-container{font-family:var(--f)}
+.leaflet-bar{border:0!important;box-shadow:var(--shadow)!important;border-radius:8px!important;overflow:hidden}
+.leaflet-bar a{width:40px!important;height:40px!important;line-height:40px!important;color:#666!important;font-size:22px!important}
+.leaflet-bottom.leaflet-right .leaflet-control-zoom{margin:0 12px 34px 0}
+.pin{background:none;border:0}
+.pin svg{display:block;overflow:visible;transform-origin:50% 95%;transition:transform .12s;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
+.pin.on svg{transform:scale(1.3)}
+.pin:focus-visible{outline:none}
+.pin:focus-visible svg{transform:scale(1.3)}
+
+/* top bar */
+.top{position:absolute;z-index:1100;left:12px;right:12px;top:12px;display:flex;gap:10px;align-items:flex-start;pointer-events:none}
+.top>*{pointer-events:auto}
+.searchwrap{position:relative;flex:0 0 376px;max-width:100%}
+.search{display:flex;align-items:center;gap:8px;background:var(--surface);border-radius:24px;box-shadow:var(--shadow);height:48px;padding:0 8px 0 16px}
+.search svg{flex:none}
+.search input{flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:15px}
+.search .x{border:0;background:transparent;width:36px;height:36px;border-radius:50%;display:grid;place-items:center}
+.search .x:hover{background:var(--hover)}
+.results{position:absolute;left:0;right:0;top:54px;background:var(--surface);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;padding:6px 0}
+.results button{display:flex;gap:10px;align-items:center;width:100%;text-align:left;border:0;background:transparent;padding:8px 16px}
+.results button:hover,.results button:focus-visible{background:var(--hover)}
+.results .sub{color:var(--muted);font-size:12.5px;display:block}
+.results .empty{padding:8px 16px;color:var(--muted)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:6px 4px 8px;flex:1 1 auto;min-width:0;scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 14px 0 11px;border-radius:18px;border:0;background:var(--surface);box-shadow:var(--shadow);font-weight:500;white-space:nowrap}
+.chip svg{width:15px;height:15px;color:var(--blue)}
+.chip .n{font-family:var(--mono);font-size:12px;color:var(--muted);font-weight:400}
+.chip[aria-pressed="false"]{color:var(--muted);background:#f1f3f4;box-shadow:none;border:1px solid var(--line)}
+.chip[aria-pressed="false"] svg{color:var(--muted)}
+.tools{display:flex;gap:8px;flex:none;padding:6px 0}
+.pillbtn{height:36px;border-radius:18px;border:0;background:var(--surface);box-shadow:var(--shadow);padding:0 14px;font-weight:500;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.pillbtn:hover{background:#f8f9fa}
+.pillsel{height:36px;border-radius:18px;background:var(--surface);box-shadow:var(--shadow);display:inline-flex;align-items:center;gap:6px;padding:0 6px 0 14px;font-weight:500;white-space:nowrap;position:relative}
+.pillsel span{color:var(--muted);font-weight:400}
+.pillsel select{appearance:none;-webkit-appearance:none;border:0;background:transparent;font-weight:500;padding:0 24px 0 2px;height:34px;color:var(--blue);cursor:pointer;max-width:11em;text-overflow:ellipsis}
+.pillsel::after{content:"";position:absolute;right:13px;top:15px;border:4.5px solid transparent;border-top-color:var(--blue);pointer-events:none}
+.seg{display:inline-flex;height:36px;border-radius:18px;background:var(--surface);box-shadow:var(--shadow);overflow:hidden}
+.seg button{border:0;background:transparent;padding:0 12px;font-weight:500;color:var(--muted);white-space:nowrap}
+.seg button[aria-pressed="true"]{background:var(--blue-soft);color:var(--blue)}
+
+/* left panel */
+.panel{position:absolute;z-index:1000;left:0;top:0;bottom:0;width:400px;max-width:100%;background:var(--surface);box-shadow:0 0 20px rgba(0,0,0,.3);display:flex;flex-direction:column}
+.panel .scroll{overflow-y:auto;padding:76px 0 24px;flex:1}
+.hero{height:112px;background:linear-gradient(135deg,#1a73e8,#6ea8f2);display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding:12px 24px;color:#fff;font-weight:500;letter-spacing:.02em}
+.hero svg{width:40px;height:40px;opacity:.9}
+.sec{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:10px;min-width:0}
+.sec:last-child{border-bottom:0}
+.sec h2{font-size:22px;font-weight:400;margin:0;line-height:1.3;text-wrap:balance}
+.sec h3{font-size:14px;font-weight:500;margin:0}
+.sec p{margin:0}
+.sub{color:var(--muted)}
+.rowline{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tag{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}
+.tag svg{width:14px;height:14px;color:var(--blue)}
+.pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:1px 10px;font-size:12.5px;font-weight:500;border:1px solid var(--blue);color:var(--blue);white-space:nowrap}
+.pill i{width:8px;height:8px;background:var(--rain);transform:rotate(45deg)}
+.acts{display:flex;gap:6px;justify-content:space-around;padding:12px 16px;border-bottom:1px solid var(--line)}
+.act{border:0;background:transparent;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;color:var(--blue);font-weight:500;padding:4px 8px;border-radius:8px;min-width:76px}
+.act span.ic{width:36px;height:36px;border-radius:50%;border:1px solid var(--line);display:grid;place-items:center}
+.act.main span.ic{background:var(--blue);border-color:var(--blue)}
+.act:hover span.ic{background:var(--blue-soft)} .act.main:hover span.ic{background:#1765cc}
+.big{display:flex;gap:22px;flex-wrap:wrap}
+.big div{display:flex;flex-direction:column;min-width:0}
+.big b{font-size:30px;font-weight:400;line-height:1.1;display:flex;align-items:center;gap:8px}
+.big b.sm{font-size:18px;line-height:1.35}
+.big span{font-size:12.5px;color:var(--muted)}
+.swatch{width:12px;height:12px;border-radius:3px;flex:none;box-shadow:inset 0 0 0 1px rgba(0,0,0,.12)}
+.delta{color:var(--muted)}
+.info{display:grid;grid-template-columns:24px 1fr;gap:12px 16px;align-items:start;margin:0}
+.info dt{color:var(--blue);display:grid;place-items:center;height:21px}
+.info dd{margin:0;min-width:0}
+.info dd small{display:block;color:var(--muted);font-size:12px}
+.caution{display:flex;gap:10px;align-items:flex-start;background:#fef7e0;border-radius:8px;padding:10px 12px;color:#3c4043;font-size:13px;line-height:1.5}
+.caution svg{flex:none;margin-top:1px}
+.chart-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.key{display:flex;gap:12px;font-size:12px;color:var(--muted)}
+.key span{display:inline-flex;align-items:center;gap:5px}
+.key i{display:inline-block;width:9px;height:9px}
+.key .k-dry{border-radius:50%;background:var(--series)}
+.key .k-rain{background:var(--rain);transform:rotate(45deg) scale(.9)}
+.chart svg{display:block;overflow:visible}
+.chart .grid{stroke:var(--grid);stroke-width:1}
+.chart .axis{stroke:var(--axis);stroke-width:1}
+.chart .tick{fill:#80868b;font-family:var(--f);font-size:11px;font-variant-numeric:tabular-nums}
+.chart .ref{stroke:#9aa0a6;stroke-width:1}
+.chart .ref.ev{stroke:var(--blue)}
+.chart .ref-label{fill:var(--muted);font-size:11px;paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round}
+.chart .area{fill:var(--series);opacity:.1}
+.chart .line{fill:none;stroke:var(--series);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.chart .pt-dry{fill:var(--series);stroke:var(--surface);stroke-width:2}
+.chart .pt-rain{fill:var(--rain);stroke:var(--surface);stroke-width:2}
+.chart .pt-miss{fill:none;stroke:#9aa0a6;stroke-width:1.4}
+.chart .pt-sel{fill:none;stroke:var(--ink);stroke-width:1.5}
+.chart .end-label{fill:var(--ink);font-size:12px;font-weight:500}
+.chart .xhair{stroke:var(--muted);stroke-width:1}
+.chart g.pt{outline:none}
+.chart g.pt:focus-visible .focus-ring{stroke:var(--blue);stroke-width:2}
+.ev-note{font-size:12.5px;color:var(--muted)}
+.evi{display:inline-block;margin-right:12px}
+.linkbtn{border:0;background:none;color:var(--blue);font-weight:500;font-size:12.5px;padding:0 2px;margin-left:6px;text-decoration:underline;text-underline-offset:2px}
+.pend{display:inline-flex;align-items:center;gap:2px;margin-left:6px;font-size:12px;color:var(--warn);white-space:nowrap}
+.info a{color:var(--blue);font-weight:500}
+.mini{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+.mini table{min-width:0}
+.mini th,.mini td{padding:7px 10px;font-size:13px}
+.mini td.note{color:var(--muted);min-width:120px}
+.raintag{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.raintag i{width:7px;height:7px;background:var(--rain);transform:rotate(45deg)}
+form.stack{display:flex;flex-direction:column;gap:12px}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);min-width:0}
+label.f input,label.f select,label.f textarea{border:1px solid var(--line);border-radius:4px;padding:8px 10px;font-size:14px;color:var(--ink);background:#fff;width:100%}
+label.f input[aria-invalid="true"],label.f select[aria-invalid="true"]{border-color:var(--crit)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.check{display:flex;gap:8px;align-items:center}
+.check input{width:18px;height:18px;accent-color:var(--blue)}
+.err{color:var(--crit);font-size:13px}
+.hint{color:var(--muted);font-size:12.5px}
+.locbox{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#f8f9fa;border-radius:8px;padding:8px 12px}
+.btn{height:36px;border-radius:18px;border:1px solid var(--line);background:#fff;color:var(--blue);padding:0 20px;font-weight:500}
+.btn:hover{background:#f8f9fa}
+.btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn.primary:hover{background:#1765cc}
+.btn.small{height:32px;padding:0 14px}
+.closebtn{position:absolute;top:66px;right:10px;width:36px;height:36px;border-radius:50%;border:0;background:rgba(255,255,255,.92);box-shadow:var(--shadow);display:grid;place-items:center;z-index:2}
+
+/* corners */
+.fab{position:absolute;z-index:900;right:12px;bottom:132px;height:48px;border-radius:24px;border:0;background:var(--blue);color:#fff;font-weight:500;padding:0 20px 0 14px;box-shadow:var(--shadow);display:inline-flex;align-items:center;gap:8px}
+.fab:hover{background:#1765cc}
+.layerbtn{position:absolute;z-index:900;left:12px;bottom:34px;width:72px;height:72px;border-radius:10px;border:2px solid #fff;box-shadow:var(--shadow);padding:0;overflow:hidden;display:flex;align-items:flex-end;justify-content:center;font-size:12px;font-weight:500;color:#fff;transition:left .2s}
+.layerbtn span{background:rgba(0,0,0,.55);width:100%;padding:3px 0}
+.layerbtn.sat{background:linear-gradient(160deg,#2f4a2c,#55713f 45%,#2c5a73)}
+.layerbtn.road{background:linear-gradient(160deg,#f3efe6 0 38%,#fff 38% 46%,#f3efe6 46% 62%,#aad3df 62%)}
+.legend{position:absolute;z-index:900;left:96px;bottom:34px;background:var(--surface);border-radius:10px;box-shadow:var(--shadow);padding:8px 12px;display:flex;flex-direction:column;gap:4px;font-size:12px;transition:left .2s;max-width:calc(100% - 180px)}
+.legend .lg1{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.legend .lg1 b{font-weight:500;font-size:12.5px}
+.legend .bar{width:132px;height:8px;border-radius:4px;background:linear-gradient(to right,#fee6d5,#f6caab,#e9ac7d,#d78e55,#bb7234,#9a5920,#794312);flex:none}
+.legend .lg2{color:var(--muted)}
+body.panel-open .layerbtn{left:412px} body.panel-open .legend{left:496px}
+.notice{position:absolute;z-index:900;left:50%;transform:translateX(-50%);bottom:6px;background:rgba(32,33,36,.82);color:#fff;border-radius:12px;padding:2px 12px;font-size:12px;white-space:nowrap;max-width:calc(100% - 24px);overflow:hidden;text-overflow:ellipsis}
+.pickbar{position:absolute;z-index:1050;left:50%;transform:translateX(-50%);top:76px;background:var(--ink);color:#fff;border-radius:24px;padding:8px 18px;box-shadow:var(--shadow);max-width:calc(100% - 24px)}
+.offline{position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;color:var(--muted)}
+
+/* list sheet */
+.scrim{position:absolute;inset:0;z-index:1200;background:rgba(32,33,36,.45);display:flex;justify-content:center;align-items:flex-start;padding:24px 16px;overflow-y:auto}
+.sheet{background:var(--surface);border-radius:16px;box-shadow:var(--shadow);width:100%;max-width:1040px;padding:20px 24px 24px;display:flex;flex-direction:column;gap:18px}
+.sheet header{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.sheet h2{margin:0;font-size:22px;font-weight:400}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:14px}
+.stat{border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.stat h3{margin:0;font-size:13px;font-weight:500;color:var(--muted)}
+.rows{display:flex;flex-direction:column;gap:2px}
+.brow,.drow{display:grid;grid-template-columns:minmax(0,8.5em) minmax(0,1fr);gap:10px;align-items:center;width:100%;border:0;background:none;padding:4px 6px;border-radius:8px;text-align:left;color:var(--ink)}
+.drow{grid-template-columns:minmax(0,8.5em) minmax(0,1fr) 2.8em}
+.brow:hover,.drow:hover,.brow:focus-visible,.drow:focus-visible{background:var(--hover)}
+.rname{font-size:13px;line-height:1.35;display:flex;gap:6px;align-items:center;overflow-wrap:anywhere}
+.rname svg{width:12px;height:12px;flex:none;color:var(--muted)}
+.btrack{display:flex;align-items:center;gap:8px;min-width:0}
+.bar{height:12px;border-radius:0 4px 4px 0;background:var(--series);flex:none}
+.bval{font-family:var(--mono);font-size:12px;color:var(--ink)}
+.bval.none{font-family:var(--f);color:var(--muted)}
+.dtrack{position:relative;height:20px}
+.dline{position:absolute;top:9px;height:2px;background:var(--axis)}
+.ddot{position:absolute;top:10px;width:10px;height:10px;margin:-5px 0 0 -5px;box-shadow:0 0 0 2px var(--surface)}
+.ddot.dry{border-radius:50%;background:var(--series)}
+.ddot.wet{background:var(--rain);transform:rotate(45deg)}
+.ddelta{font-family:var(--mono);font-size:12px;text-align:right}
+.daxis{display:grid;grid-template-columns:minmax(0,8.5em) minmax(0,1fr) 2.8em;gap:10px;padding:0 6px}
+.daxis .ticks{position:relative;height:16px;border-top:1px solid var(--axis);font-size:11px;color:#80868b}
+.daxis .ticks span{position:absolute;top:2px;transform:translateX(-50%)}
+.daxis .ticks span:first-child{transform:none}
+.daxis .ticks span:last-child{transform:translateX(-100%)}
+.tablebox{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+table{border-collapse:collapse;width:100%}
+.tablebox table{min-width:700px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12.5px;color:var(--muted);font-weight:500;white-space:nowrap;background:#f8f9fa}
+th button{all:unset;cursor:pointer}
+th button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+td.r,th.r{text-align:right}
+.tablebox tbody tr{cursor:pointer}
+.tablebox tbody tr:hover{background:var(--hover)}
+tbody tr:last-child td{border-bottom:0}
+td.t{font-weight:500}
+td.t .sub{display:block;font-weight:400;font-size:13px}
+.copyrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.copyrow textarea{width:100%;font-family:var(--mono);font-size:12px;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+
+/* tooltip & toast */
+.tip{position:fixed;z-index:3000;pointer-events:none;max-width:240px;background:var(--surface);color:var(--ink);border-radius:8px;box-shadow:var(--shadow);padding:8px 10px;font-size:12.5px;line-height:1.45}
+.tip .tv{font-size:18px;font-weight:500;line-height:1.2}
+.tip .tl{color:var(--muted)}
+.tip .tk{display:inline-block;width:12px;height:2px;vertical-align:middle;margin-right:6px}
+.toast{position:absolute;z-index:3000;left:50%;bottom:40px;transform:translateX(-50%);background:#323232;color:#fff;border-radius:8px;padding:12px 16px;font-size:14px;box-shadow:var(--shadow);max-width:calc(100% - 32px)}
+
+@media (max-width:900px){
+  .top{flex-wrap:wrap;gap:4px 10px}
+  .searchwrap{flex:1 1 100%}
+  .chips{flex:1 1 100%;padding-bottom:4px}
+  .tools{flex:1 1 100%;overflow-x:auto;padding:2px 4px 6px}
+  .panel{top:auto;height:58%;width:100%;border-radius:16px 16px 0 0}
+  .panel .scroll{padding-top:0}
+  .closebtn{top:10px}
+  body.panel-open .layerbtn,body.panel-open .legend,body.panel-open .fab,body.panel-open .notice{display:none}
+  .legend{left:96px;bottom:34px;max-width:calc(100% - 156px)}
+  .legend .lg2{display:none}
+  .legend .bar{width:72px}
+  #round-l{display:none}
+  .pillsel{padding-left:12px}
+  .pillsel select{max-width:8.5em}
+  .pickbar{top:150px}
+}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="top">
+  <div class="searchwrap">
+    <div class="search">
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="#5f6368" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14"/></svg>
+      <input id="q" type="search" autocomplete="off">
+      <button type="button" class="x" id="q-clear" hidden><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="#5f6368" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+    </div>
+    <div class="results" id="results" hidden></div>
+  </div>
+  <div class="chips" id="chips" role="group"></div>
+  <div class="tools">
+    <label class="pillsel" for="round"><span id="round-l"></span><select id="round"></select></label>
+    <button type="button" class="pillbtn" id="open-list"></button>
+    <div class="seg" role="group" id="lang-group">
+      <button type="button" id="l-ko">한국어</button><button type="button" id="l-en">EN</button>
+    </div>
+  </div>
+</div>
+
+<div class="pickbar" id="pickbar" hidden></div>
+
+<aside class="panel" id="panel" hidden>
+  <button type="button" class="closebtn" id="panel-close"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="#5f6368" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+  <div class="scroll" id="panel-body" aria-live="polite"></div>
+</aside>
+
+<button type="button" class="fab" id="add"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg><span id="add-l"></span></button>
+<button type="button" class="layerbtn sat" id="layer"><span id="layer-l"></span></button>
+<div class="legend" id="legend"></div>
+<div class="notice" id="notice"></div>
+
+<div class="scrim" id="scrim" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-h">
+    <header><h2 id="sheet-h"></h2><button type="button" class="btn" id="sheet-close"></button></header>
+    <div class="stats" id="stats"></div>
+    <div class="tablebox"><table id="table"></table></div>
+    <div class="copyrow">
+      <button type="button" class="btn small" id="copy-meas"></button>
+      <button type="button" class="btn small" id="copy-src"></button>
+      <span class="hint" id="copy-msg" role="status"></span>
+      <textarea id="copy-fb" rows="6" readonly hidden aria-label="CSV"></textarea>
+    </div>
+  </div>
+</div>
+
+<div class="tip" id="tip" role="tooltip" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(() => {
+'use strict';
+/* ------------------------------------------------------------------
+   Settings. Readings live in the Supabase project shared with the village problem map
+   (tables water_sources, water_readings, water_events). The key below is the public one:
+   anyone can read and add rows; nobody can edit or delete them, except the device that
+   added a row, within 24 hours (database function water_undo).
+------------------------------------------------------------------- */
+const CONFIG = {
+  DB_URL: 'https://scuwapqopssndoyjrzze.supabase.co/rest/v1',
+  DB_KEY: 'sb_publishable__zJmaGtsgJhy8raEbPZfHQ_wOsz75AI',
+  PROBLEM_MAP_URL: '../',             // the village problem map, one folder up in the same repository
+  RETURN_DATE: '2027-01-23',          // the day the volunteer team flies home
+  HOME: [11.1090, 125.0203],          // Barangay San Roque, Tanauan, Leyte (same example village as the problem map)
+  INDEX_MAX: 120,
+  POLL_MS: 30000,                     // how often to look for other people's new readings
+  UNDO_MS: 24 * 3600 * 1000,          // how long a device can remove its own rows (the database enforces this too)
+  CACHE_KEY: 'water-map-db-cache-v1', QUEUE_KEY: 'water-map-queue-v1', TOKEN_KEY: 'water-map-device-v1'
+};
+
+/* ---------- words ---------- */
+const T = {
+  place:{ko:'필리핀 레이테주 타나우안, 바랑가이 산 로케', en:'Barangay San Roque, Tanauan, Leyte, Philippines'},
+  docTitle:{ko:'우리 마을 물 지도', en:'Our Village Water Map'},
+  search:{ko:'수원 검색 (우물, 수도, 하천…)', en:'Search water sources'},
+  list:{ko:'목록과 비교', en:'List & compare'},
+  roundL:{ko:'측정일', en:'Date'}, latest:{ko:'최근 값', en:'Latest'}, afterRain:{ko:'비 온 뒤', en:'after rain'},
+  add:{ko:'측정값 기록', en:'Add a reading'},
+  sat:{ko:'위성', en:'Satellite'}, road:{ko:'지도', en:'Map'},
+  close:{ko:'닫기', en:'Close'}, save:{ko:'저장', en:'Save'}, cancel:{ko:'취소', en:'Cancel'},
+  noticeExample:{ko:'보이는 수원과 측정값은 지어낸 예시예요 · 새로 기록한 값은 실제로 저장돼요', en:'Sources and readings shown are invented examples · New readings are saved for real'},
+  noticeLive:{ko:'{time} 기준 최신 자료', en:'Up to date as of {time}'},
+  noticeCache:{ko:'인터넷이 끊겨 {time}에 받아 둔 자료를 보여 주는 중', en:'Offline · showing data from {time}'},
+  noticeLoading:{ko:'자료를 불러오는 중…', en:'Loading…'},
+  noticeFail:{ko:'자료를 불러오지 못했어요 · 연결되면 다시 불러와요', en:'Could not load data · will retry when online'},
+  withExample:{ko:' · 예시 자료 포함', en:' · includes examples'},
+  withQueue:{ko:' · 보내지 않은 기록 {n}개', en:' · {n} not sent yet'},
+  lgTitle:{ko:'탁도 지수', en:'Turbidity index'},
+  lgNote:{ko:'핀 숫자는 탁도 지수, 색은 탁한 정도예요. 마셔도 되는지는 알려 주지 않아요.', en:'Pin numbers are the turbidity index. Colour shows cloudiness, not whether water is safe.'},
+  t_well:{ko:'우물', en:'Wells'}, t_tap:{ko:'수도', en:'Taps'}, t_stream:{ko:'하천', en:'Streams'}, t_rain:{ko:'빗물 저장조', en:'Rain tanks'},
+  s_well:{ko:'우물', en:'Well'}, s_tap:{ko:'수도', en:'Tap'}, s_stream:{ko:'하천', en:'Stream'}, s_rain:{ko:'빗물 저장조', en:'Rain tank'},
+  zoomTo:{ko:'가까이 보기', en:'Zoom in'}, copy:{ko:'좌표 복사', en:'Copy coordinates'}, copied:{ko:'복사됨', en:'Copied'},
+  latestH:{ko:'최근 측정', en:'Latest reading'}, roundH:{ko:'{date} 측정', en:'Reading on {date}'},
+  turb:{ko:'탁도 지수', en:'Turbidity index'}, temp:{ko:'수온', en:'Water temp'}, by:{ko:'측정한 사람', en:'Measured by'},
+  notMeasured:{ko:'측정 안 함', en:'Not measured'}, noRound:{ko:'{date}에는 이 수원을 측정하지 않았어요.', en:'This source was not measured on {date}.'},
+  dUp:{ko:'직전 측정({date}{rain})보다 {d} 높아요.', en:'{d} higher than the reading before ({date}{rain}).'},
+  dDown:{ko:'직전 측정({date}{rain})보다 {d} 낮아요.', en:'{d} lower than the reading before ({date}{rain}).'},
+  dSame:{ko:'직전 측정({date}{rain})과 같아요.', en:'Same as the reading before ({date}{rain}).'},
+  rainParen:{ko:', 비 온 뒤', en:', after rain'},
+  chartH:{ko:'탁도 지수 변화', en:'Turbidity over time'}, kDry:{ko:'맑은 날', en:'Dry day'}, kRain:{ko:'비 온 뒤', en:'After rain'},
+  refReturn:{ko:'봉사팀 귀국', en:'Team left'},
+  chartDesc:{ko:'{name}의 탁도 지수를 날짜별로 그린 선 그래프. 같은 값이 아래 기록 표에 있어요.', en:'Line chart of the turbidity index for {name} by date. The same values are in the table below.'},
+  caution:{ko:'이 측정기는 세균을 볼 수 없어요. 숫자가 낮아도 마시기 전에는 끓이거나 햇빛 소독(SODIS)을 하세요.', en:'This meter cannot see bacteria. Even when the number is low, boil drinking water or use solar disinfection (SODIS).'},
+  coord:{ko:'위도, 경도', en:'Latitude, longitude'},
+  countH:{ko:'측정 {n}번 · 첫 측정 {date}', en:'{n} readings · first on {date}'}, countSub:{ko:'기록', en:'Record'},
+  problemSub:{ko:'마을 문제 지도와 연결된 문제', en:'Linked problem on the village problem map'},
+  problemPrivate:{ko:'학교·봉사팀 보기에서만 보이는 문제', en:'Shown in the school & team view only'},
+  openProblem:{ko:'문제 지도 열기', en:'Open the problem map'},
+  newSource:{ko:'새 수원', en:'New source'}, tagExample:{ko:'예시', en:'Example'}, tagPending:{ko:'아직 안 보냄', en:'Not sent yet'},
+  undo:{ko:'지우기', en:'Remove'}, undoSource:{ko:'이 수원 지우기', en:'Remove this source'},
+  undoQ:{ko:'이 기록을 지울까요? 되돌릴 수 없어요.', en:'Remove this record? This cannot be undone.'},
+  undone:{ko:'지웠어요.', en:'Removed.'},
+  undoFail:{ko:'지우지 못했어요. 24시간이 지났거나, 다른 사람이 이 수원에 기록을 더했어요.', en:'Could not remove it. More than 24 hours have passed, or someone else has added to this source.'},
+  undoOffline:{ko:'인터넷이 끊겨 지우지 못했어요.', en:'Offline, so it could not be removed.'},
+  records:{ko:'기록', en:'Readings'},
+  thDate:{ko:'날짜', en:'Date'}, thTurb:{ko:'탁도', en:'Turbidity'}, thTemp:{ko:'수온 °C', en:'Temp °C'}, thRain:{ko:'비', en:'Rain'}, thBy:{ko:'측정자', en:'By'}, thNote:{ko:'메모', en:'Note'},
+  thNo:{ko:'번호', en:'No.'}, thName:{ko:'수원', en:'Source'}, thType:{ko:'종류', en:'Type'}, thLast:{ko:'마지막 측정', en:'Last reading'}, thGap:{ko:'비 온 뒤 차이', en:'Rain gap'},
+  sumH:{ko:'한눈에 보기', en:'At a glance'}, sumSrc:{ko:'수원', en:'sources'}, sumMeas:{ko:'측정 기록', en:'readings'}, sumAfter:{ko:'귀국 뒤 측정일', en:'days measured after the team left'},
+  sumLast:{ko:'마지막 측정 {date} · {by}', en:'Last reading {date} · {by}'},
+  barsH:{ko:'수원별 탁도 지수 · {round}', en:'Turbidity by source · {round}'},
+  barsNote:{ko:'같은 측정기로 잰 값끼리 비교해요.', en:'Compare readings from the same meter only.'},
+  dbH:{ko:'비 오기 전과 비 온 뒤', en:'Dry days against after rain'},
+  dbDry:{ko:'맑은 날 평균', en:'Dry-day average'}, dbWet:{ko:'비 온 뒤 평균', en:'After-rain average'},
+  dbNote:{ko:'차이가 클수록 비가 오면 흙이 많이 섞여 들어와요.', en:'A bigger gap means more soil washes in when it rains.'},
+  none:{ko:'조건에 맞는 수원이 없어요. 위의 종류 버튼을 다시 켜 보세요.', en:'No sources match. Turn the type buttons back on.'},
+  copyMeas:{ko:'측정값 CSV 복사', en:'Copy readings as CSV'}, copySrc:{ko:'수원 목록 CSV 복사', en:'Copy sources as CSV'},
+  copyOk:{ko:'복사했어요. 스프레드시트에 붙여 넣으면 돼요.', en:'Copied. Paste it into the spreadsheet.'},
+  copyFail:{ko:'복사가 막혀 있어요. 아래 글을 직접 선택해서 복사하세요.', en:'Copying is blocked. Select the text below and copy it yourself.'},
+  formH:{ko:'측정값 기록', en:'Add a reading'},
+  fSource:{ko:'수원', en:'Source'}, fNew:{ko:'+ 새 수원 추가', en:'+ Add a new source'},
+  fName:{ko:'새 수원 이름', en:'New source name'}, fType:{ko:'종류', en:'Type'},
+  fLocNone:{ko:'지도를 눌러 새 수원 위치를 고르세요', en:'Tap the map where the new source is'},
+  fLocMove:{ko:'지도를 다시 누르면 위치가 바뀝니다', en:'Tap the map again to move it'},
+  fDate:{ko:'측정일', en:'Date'}, fBy:{ko:'측정자 (이름만)', en:'Measured by (first name)'},
+  fTurb:{ko:'탁도 지수 (0~300)', en:'Turbidity index (0–300)'}, fTemp:{ko:'수온 (°C)', en:'Water temp (°C)'},
+  fRain:{ko:'최근 24시간 안에 비가 왔어요', en:'It rained in the last 24 hours'},
+  fNote:{ko:'메모 (선택)', en:'Note (optional)'},
+  fEvent:{ko:'이날 수원에 생긴 변화 (선택)', en:'Anything changed at the source? (optional)'}, fEventPh:{ko:'예: 뚜껑 설치, 청소', en:'e.g. new lid, cleaned'},
+  fHint:{ko:'저장하면 바로 모두에게 보여요. 인터넷이 끊겨 있으면 이 기기에 모아 두었다가 연결되면 보내요.', en:'Saved readings show up for everyone. Offline, they wait on this device and are sent when you reconnect.'},
+  eName:{ko:'새 수원 이름을 적어 주세요.', en:'Enter a name for the new source.'},
+  eLoc:{ko:'지도에서 새 수원 위치를 눌러 주세요.', en:'Tap the map to place the new source.'},
+  eDate:{ko:'측정일을 골라 주세요. (2025~2035년)', en:'Choose the reading date (2025–2035).'},
+  eTurb:{ko:'탁도 지수를 0~300 사이 숫자로 적어 주세요.', en:'Enter a turbidity index from 0 to 300.'},
+  eTemp:{ko:'수온을 5~45 사이 숫자로 적어 주세요.', en:'Enter a water temperature from 5 to 45.'},
+  eBy:{ko:'측정한 사람을 적어 주세요.', en:'Enter who took the reading.'},
+  saved:{ko:'저장했어요. 24시간 안에는 이 기기에서 지울 수 있어요.', en:'Saved. You can remove it from this device for 24 hours.'},
+  savedLocal:{ko:'인터넷이 끊겨 이 기기에 저장해 뒀어요. 연결되면 자동으로 보내요.', en:'Offline, so it is kept on this device and will be sent automatically.'},
+  rejected:{ko:'저장이 거절된 기록이 있어요. 값을 확인하고 다시 입력해 주세요.', en:'The database refused a record. Check the values and enter it again.'},
+  ttMissing:{ko:'이날은 측정하지 않았어요', en:'Not measured this day'},
+  offline:{ko:'지도를 불러오지 못했습니다. 인터넷에 연결한 뒤 다시 열어 주세요.', en:'The map could not load. Connect to the internet and open the page again.'}
+};
+
+/* ---------- state ---------- */
+const TYPES = ['well', 'tap', 'stream', 'rain'];
+const S = {lang:'ko', sources:[], meas:[], events:[], sel:null, round:'latest', types:new Set(TYPES), mode:'idle',
+  formSource:null, draft:null, formVals:null, sat:false, list:false, sort:{k:'id', dir:1}, status:'loading', at:null};
+const $ = (id) => document.getElementById(id);
+const t = (k, vars) => { let s = (T[k] && (T[k][S.lang] ?? T[k].ko)) ?? k; if (vars) for (const v in vars) s = s.split('{' + v + '}').join(String(vars[v])); return s; };
+const L_ = (o) => o == null ? '' : (typeof o === 'string' ? o : (o[S.lang] ?? o.ko ?? ''));
+const DAY = 86400000;
+const toT = (iso) => { const [y, m, d] = iso.split('-').map(Number); return Date.UTC(y, m - 1, d); };
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmtDate = (iso) => { const [, m, d] = iso.split('-').map(Number); return S.lang === 'ko' ? `${m}월 ${d}일` : `${MON[m - 1]} ${d}`; };
+const fmtTemp = (c) => c == null ? '–' : c.toFixed(1);
+const reduceMotion = () => window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+function h(tag, attrs, ...kids){
+  const el = document.createElement(tag);
+  if (attrs) for (const k in attrs){
+    const v = attrs[k]; if (v == null || v === false) continue;
+    if (k === 'class') el.className = v; else if (k === 'text') el.textContent = v;
+    else if (k === 'html') el.innerHTML = v;            /* only ever used with static icon markup */
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids.flat()){ if (kid == null || kid === false || kid === '') continue; el.append(kid instanceof Node ? kid : document.createTextNode(String(kid))); }
+  return el;
+}
+const SVGNS = 'http://www.w3.org/2000/svg';
+function s(tag, attrs, parent){ const el = document.createElementNS(SVGNS, tag); if (attrs) for (const k in attrs) if (attrs[k] != null) el.setAttribute(k, attrs[k]); if (parent) parent.appendChild(el); return el; }
+
+/* ---------- colour: one sediment hue, light (clear) to dark (muddy) ---------- */
+const RAMP = ['#fee6d5','#f6caab','#e9ac7d','#d78e55','#bb7234','#9a5920','#794312'].map(x => [1,3,5].map(i => parseInt(x.slice(i, i + 2), 16)));
+function rampColor(v){
+  const p = Math.max(0, Math.min(1, v / CONFIG.INDEX_MAX)) * (RAMP.length - 1);
+  const i = Math.min(RAMP.length - 2, Math.floor(p)), f = p - i;
+  return '#' + RAMP[i].map((a, k) => Math.round(a + (RAMP[i + 1][k] - a) * f).toString(16).padStart(2, '0')).join('');
+}
+function textOn(hex){
+  const [r, g, b] = [1,3,5].map(i => { const x = parseInt(hex.slice(i, i + 2), 16) / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.3 ? '#202124' : '#ffffff';
+}
+
+/* ---------- data helpers ---------- */
+const src = (id) => S.sources.find(x => x.id === id);
+const measOf = (id) => S.meas.filter(m => m.source === id).sort((a, b) => toT(a.date) - toT(b.date) || (a.at || 9e15) - (b.at || 9e15));
+const latestOf = (id) => measOf(id).filter(m => m.turbidity != null).pop() || null;
+const atRound = (id) => S.round === 'latest' ? latestOf(id) : (measOf(id).find(m => m.date === S.round) || null);
+const valueOf = (id) => { const m = atRound(id); return m && m.turbidity != null ? m.turbidity : null; };
+function rounds(){
+  const mp = new Map();
+  for (const m of S.meas) mp.set(m.date, (mp.get(m.date) || false) || !!m.rain);
+  return [...mp.entries()].sort((a, b) => toT(b[0]) - toT(a[0])).map(([date, rain]) => ({date, rain}));
+}
+const roundLabel = () => S.round === 'latest' ? t('latest') : fmtDate(S.round) + (rounds().find(r => r.date === S.round)?.rain ? ' · ' + t('afterRain') : '');
+const visible = () => S.sources.filter(x => S.types.has(x.type));
+
+/* ---------- shapes for the source types ---------- */
+function shapeInner(type, cx, cy, r){
+  if (type === 'well') return `<circle cx="${cx}" cy="${cy}" r="${r}"/>`;
+  if (type === 'tap'){ const a = r * 0.92; return `<rect x="${cx - a}" y="${cy - a}" width="${2 * a}" height="${2 * a}" rx="${r * 0.3}"/>`; }
+  if (type === 'stream'){ const a = r * 1.2; return `<path d="M${cx} ${cy - a}L${cx + a} ${cy}L${cx} ${cy + a}L${cx - a} ${cy}Z"/>`; }
+  const p = []; for (let k = 0; k < 6; k++){ const a = (-90 + 60 * k) * Math.PI / 180; p.push((cx + r * 1.1 * Math.cos(a)).toFixed(2) + ',' + (cy + r * 1.1 * Math.sin(a)).toFixed(2)); }
+  return `<polygon points="${p.join(' ')}"/>`;
+}
+const typeIcon = (type) => `<svg viewBox="0 0 16 16" aria-hidden="true"><g style="fill:none;stroke:currentColor;stroke-width:1.7">${shapeInner(type, 8, 8, 5.4)}</g></svg>`;
+const PIN = 'M15 1.5C8 1.5 2.5 7 2.5 14c0 9.3 12.5 24 12.5 24s12.5-14.7 12.5-24C27.5 7 22 1.5 15 1.5z';
+function pinSvg(type, v, w){
+  const fill = v == null ? '#ffffff' : rampColor(v);
+  const ink = v == null ? '#5f6368' : textOn(fill);
+  const label = v == null ? '–' : String(Math.round(v));
+  const fs = label.length > 2 ? 9.6 : 11.5;
+  return `<svg width="${w}" height="${(w * 4 / 3).toFixed(1)}" viewBox="0 0 30 40" aria-hidden="true">` +
+    `<path d="${PIN}" fill="none" stroke="rgba(60,64,67,.45)" stroke-width="3"/>` +
+    `<path d="${PIN}" fill="${fill}" stroke="${v == null ? '#80868b' : '#fff'}" stroke-width="1.5"${v == null ? ' stroke-dasharray="3 2.4"' : ''}/>` +
+    `<text x="15" y="14" dy="0.36em" text-anchor="middle" style="font:700 ${fs}px Roboto,'Noto Sans KR',sans-serif;fill:${ink}">${label}</text>` +
+    `<g transform="translate(26 4.5)"><circle r="5.8" fill="#fff" stroke="rgba(60,64,67,.4)" stroke-width=".8"/><g style="fill:none;stroke:#3c4043;stroke-width:1.15">${shapeInner(type, 0, 0, 2.8)}</g></g></svg>`;
+}
+
+/* ---------- map ---------- */
+let map, layerRoad, layerSat, pins, draftPin = null;
+function initMap(){
+  map = L.map('map', {zoomControl:false, center:CONFIG.HOME, zoom:17, maxZoom:20, minZoom:5});
+  L.control.zoom({position:'bottomright'}).addTo(map);
+  /* Street map: the humanitarian OpenStreetMap style. The main openstreetmap.org tile server refuses pages opened straight from disk, so it is not used. */
+  const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+  layerRoad = L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {subdomains:'abc', maxZoom:20, maxNativeZoom:19,
+    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, style by <a href="https://www.hotosm.org/">HOT</a>, hosted by OSM France'}).addTo(map);
+  /* If that server blocks or fails, switch to a plainer street map. */
+  let swapped = false, fails = 0;
+  const swap = () => {
+    if (swapped) return; swapped = true;
+    map.attributionControl.removeAttribution(layerRoad.options.attribution);
+    layerRoad.options.attribution = 'Tiles &copy; Esri';
+    if (map.hasLayer(layerRoad)) map.attributionControl.addAttribution(layerRoad.options.attribution);
+    layerRoad.setUrl(ESRI);
+  };
+  layerRoad.on('tileerror', () => { if (++fails >= 2) swap(); });
+  const probe = new Image(); probe.onerror = swap; probe.src = 'https://a.tile.openstreetmap.fr/hot/17/111054/61465.png';
+  layerSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom:20, maxNativeZoom:18, attribution:'Imagery &copy; Esri, Maxar, Earthstar Geographics'});
+  pins = L.layerGroup().addTo(map);
+  map.on('click', (e) => {
+    $('results').hidden = true;
+    if (S.mode === 'form' && S.formSource === '__new'){
+      S.draft = {lat:+e.latlng.lat.toFixed(5), lng:+e.latlng.lng.toFixed(5)};
+      drawDraft(); const c = $('n-loc'); if (c) c.textContent = S.draft.lat.toFixed(5) + ', ' + S.draft.lng.toFixed(5);
+      const hnt = $('n-loc-hint'); if (hnt) hnt.textContent = t('fLocMove');
+      const er = $('f-err'); if (er && er.dataset.k === 'eLoc') er.textContent = '';
+      $('pickbar').hidden = true;
+    }
+  });
+}
+function drawDraft(){
+  if (!map) return;
+  if (draftPin){ map.removeLayer(draftPin); draftPin = null; }
+  if (S.mode === 'form' && S.formSource === '__new' && S.draft){
+    const ty = ($('n-type') && $('n-type').value) || 'well';
+    draftPin = L.marker([S.draft.lat, S.draft.lng], {icon:L.divIcon({className:'pin on', html:pinSvg(ty, null, 34), iconSize:[34, 45], iconAnchor:[17, 43]}), interactive:false, zIndexOffset:2000}).addTo(map);
+  }
+}
+function pinTitle(x){ const v = valueOf(x.id); return `${L_(x.name)} · ${t('s_' + x.type)} · ${t('turb')} ${v == null ? t('notMeasured') : v}`; }
+function drawPins(){
+  if (!map) return;
+  pins.clearLayers();
+  visible().forEach(x => {
+    const m = L.marker([x.lat, x.lng], {
+      icon:L.divIcon({className:'pin' + (x.id === S.sel ? ' on' : ''), html:pinSvg(x.type, valueOf(x.id), 34), iconSize:[34, 45], iconAnchor:[17, 43]}),
+      keyboard:true, title:pinTitle(x), zIndexOffset:x.id === S.sel ? 1000 : 0
+    });
+    m.on('click', () => select(x.id));
+    pins.addLayer(m);
+    const el = m.getElement(); if (el) el.setAttribute('aria-label', pinTitle(x));
+  });
+  $('map').classList.toggle('pick', S.mode === 'form' && S.formSource === '__new');
+  drawDraft();
+}
+function reveal(x, zoom){
+  if (!map || !x) return;
+  const wide = window.innerWidth > 900;
+  if (zoom) map.setView([x.lat, x.lng], Math.max(map.getZoom(), zoom), {animate:false});
+  map.panInside([x.lat, x.lng], {paddingTopLeft:wide ? [440, 120] : [30, 150], paddingBottomRight:wide ? [80, 80] : [30, window.innerHeight * 0.6 + 20], animate:!reduceMotion()});
+}
+function fitAll(){
+  if (!map || !S.sources.length) return;
+  const wide = window.innerWidth > 900, b = L.latLngBounds(S.sources.map(x => [x.lat, x.lng]));
+  map.fitBounds(b, {paddingTopLeft:[wide && S.sel ? 440 : 40, wide ? 90 : 160], paddingBottomRight:[wide ? 90 : 40, wide ? 70 : (S.sel ? window.innerHeight * 0.6 : 140)], maxZoom:18, animate:false});
+}
+
+/* ---------- tooltip & toast ---------- */
+const tip = $('tip');
+function showTip(nodes, x, y){
+  tip.replaceChildren(...nodes); tip.hidden = false;
+  const r = tip.getBoundingClientRect(); let l = x + 14, tp = y + 14;
+  if (l + r.width > innerWidth - 8) l = x - r.width - 14;
+  if (tp + r.height > innerHeight - 8) tp = y - r.height - 14;
+  tip.style.left = Math.max(8, l) + 'px'; tip.style.top = Math.max(8, tp) + 'px';
+}
+const hideTip = () => { tip.hidden = true; };
+function readingTip(m){
+  const out = [];
+  if (m.turbidity != null){ out.push(h('div', {class:'tv', text:String(m.turbidity)})); out.push(h('div', {class:'tl'}, h('span', {class:'tk', style:'background:var(--series)'}), t('turb'))); }
+  else out.push(h('div', {class:'tl', text:t('ttMissing')}));
+  out.push(h('div', {text:fmtDate(m.date) + (m.rain ? ' · ' + t('afterRain') : '')}));
+  if (m.temp != null) out.push(h('div', {class:'tl', text:t('temp') + ' ' + fmtTemp(m.temp) + '°C'}));
+  if (m.by) out.push(h('div', {class:'tl', text:L_(m.by)}));
+  if (m.note) out.push(h('div', {class:'tl', text:L_(m.note)}));
+  return out;
+}
+let toastT = null;
+function toast(msg){ const el = $('toast'); el.textContent = msg; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, 4200); }
+
+/* ---------- icons (static markup) ---------- */
+const IC = {
+  pin:'<svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7m0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5"/></svg>',
+  cal:'<svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2m0 16H5V9h14z"/></svg>',
+  link:'<svg width="20" height="20" viewBox="0 0 24 24"><path fill="currentColor" d="M3.9 12a3.1 3.1 0 0 1 3.1-3.1h4V7H7a5 5 0 0 0 0 10h4v-1.9H7A3.1 3.1 0 0 1 3.9 12M8 13h8v-2H8zm9-6h-4v1.9h4a3.1 3.1 0 0 1 0 6.2h-4V17h4a5 5 0 0 0 0-10"/></svg>',
+  edit:'<svg width="18" height="18" viewBox="0 0 24 24"><path fill="#fff" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75z"/></svg>',
+  zoom:'<svg width="18" height="18" viewBox="0 0 24 24"><path fill="#1a73e8" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14m.5-7H9v2H7v1h2v2h1v-2h2V9h-2z"/></svg>',
+  copy:'<svg width="18" height="18" viewBox="0 0 24 24"><path fill="#1a73e8" d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2m0 16H8V7h11z"/></svg>',
+  warn:'<svg width="18" height="18" viewBox="0 0 24 24"><path fill="#b06000" d="M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z"/></svg>',
+  drop:'<svg viewBox="0 0 24 24"><path fill="#fff" d="M12 2.7S5.5 10 5.5 14.5a6.5 6.5 0 0 0 13 0C18.5 10 12 2.7 12 2.7"/></svg>'
+};
+
+/* ---------- panel: one water source ---------- */
+function panelDetail(x){
+  const all = measOf(x.id), cur = atRound(x.id), hasV = cur && cur.turbidity != null;
+  const frag = [];
+  frag.push(h('div', {class:'hero'}, h('span', {text:`${x.pending ? t('newSource') : x.id} · ${t('s_' + x.type)}${x.example ? ' · ' + t('tagExample') : ''}`}), h('span', {html:IC.drop})));
+  const tag = h('span', {class:'tag', html:typeIcon(x.type)}); tag.append(t('s_' + x.type));
+  frag.push(h('div', {class:'sec'}, h('h2', {text:L_(x.name)}), h('div', {class:'rowline'}, tag, cur && cur.rain ? h('span', {class:'pill'}, h('i'), t('afterRain')) : null), h('p', {class:'sub', text:L_(x.desc)})));
+  frag.push(h('div', {class:'acts'},
+    h('button', {type:'button', class:'act main', 'data-act':'add'}, h('span', {class:'ic', html:IC.edit}), t('add')),
+    h('button', {type:'button', class:'act', 'data-act':'zoom'}, h('span', {class:'ic', html:IC.zoom}), t('zoomTo')),
+    h('button', {type:'button', class:'act', 'data-act':'copy'}, h('span', {class:'ic', html:IC.copy}), h('span', {id:'copy-l', text:t('copy')}))
+  ));
+  const readSec = h('div', {class:'sec'}, h('h3', {text:S.round === 'latest' ? t('latestH') : t('roundH', {date:fmtDate(S.round)})}));
+  if (!cur && S.round !== 'latest') readSec.append(h('p', {class:'delta', text:t('noRound', {date:fmtDate(S.round)})}));
+  if (cur){
+    readSec.append(h('div', {class:'big'},
+      h('div', null, h('b', null, hasV ? h('i', {class:'swatch', style:'background:' + rampColor(cur.turbidity)}) : null, hasV ? String(cur.turbidity) : '–'), h('span', {text:t('turb')})),
+      h('div', null, h('b', {text:cur.temp != null ? fmtTemp(cur.temp) + '°C' : '–'}), h('span', {text:t('temp')})),
+      h('div', null, h('b', {class:'sm', text:fmtDate(cur.date)}), h('span', {text:L_(cur.by)}))
+    ));
+    if (!hasV && cur.note) readSec.append(h('p', {class:'delta', text:L_(cur.note)}));
+    if (hasV){
+      const prev = all.filter(m => toT(m.date) < toT(cur.date) && m.turbidity != null).pop();
+      if (prev){
+        const d = cur.turbidity - prev.turbidity, vars = {date:fmtDate(prev.date), rain:prev.rain ? t('rainParen') : '', d:Math.abs(d)};
+        readSec.append(h('p', {class:'delta', text:t(d > 0 ? 'dUp' : d < 0 ? 'dDown' : 'dSame', vars)}));
+      }
+    }
+  }
+  frag.push(readSec);
+  const chartHost = h('div', {class:'chart'});
+  const evs = S.events.filter(e => e.source === x.id);
+  frag.push(h('div', {class:'sec'},
+    h('div', {class:'chart-head'}, h('h3', {text:t('chartH')}), h('div', {class:'key', 'aria-hidden':'true'}, h('span', null, h('i', {class:'k-dry'}), t('kDry')), h('span', null, h('i', {class:'k-rain'}), t('kRain')))),
+    chartHost,
+    evs.length ? h('p', {class:'ev-note'}, ...evs.map(e => h('span', {class:'evi'}, fmtDate(e.date) + ' ' + L_(e.label), mineTag('event', e)))) : null,
+    h('div', {class:'caution', role:'note'}, h('span', {html:IC.warn}), h('span', {text:t('caution')}))
+  ));
+  const first = all[0];
+  const dl = h('dl', {class:'info'},
+    h('dt', {html:IC.pin}), h('dd', {class:'num'}, `${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}`, h('small', {text:t('coord')})),
+    first ? h('dt', {html:IC.cal}) : null, first ? h('dd', null, t('countH', {n:all.filter(m => m.turbidity != null).length, date:fmtDate(first.date)}), h('small', {text:t('countSub')})) : null,
+    x.problem ? h('dt', {html:IC.link}) : null,
+    x.problem ? h('dd', null, `No. ${x.problem.no} · ${x.problem.pub ? L_(x.problem.title) : t('problemPrivate')}`,
+      h('small', null, t('problemSub') + ' · ', h('a', {href:CONFIG.PROBLEM_MAP_URL, text:t('openProblem')}))) : null
+  );
+  const dropSrc = canUndo(x) && all.every(canUndo) && evs.every(canUndo);
+  frag.push(h('div', {class:'sec'}, dl, dropSrc ? h('div', {style:'margin-top:12px'}, h('button', {type:'button', class:'btn small', 'data-act':'undo', 'data-kind':'source', 'data-id':x.db, 'data-tmp':x.tmp, text:t('undoSource')})) : null));
+  const rows = all.slice().reverse().map(m => h('tr', null,
+    h('td', {class:'num', style:'white-space:nowrap', text:fmtDate(m.date)}),
+    h('td', {class:'r num', text:m.turbidity != null ? String(m.turbidity) : '–'}),
+    h('td', {class:'r num', text:fmtTemp(m.temp)}),
+    h('td', null, m.rain ? h('span', {class:'raintag'}, h('i'), t('afterRain')) : ''),
+    h('td', {text:L_(m.by)}),
+    h('td', {class:'note'}, m.note ? L_(m.note) : '', mineTag('reading', m))
+  ));
+  frag.push(h('div', {class:'sec'}, h('h3', {text:t('records')}),
+    h('div', {class:'mini'}, h('table', null,
+      h('thead', null, h('tr', null, h('th', {text:t('thDate')}), h('th', {class:'r', text:t('thTurb')}), h('th', {class:'r', text:t('thTemp')}), h('th', {text:t('thRain')}), h('th', {text:t('thBy')}), h('th', {text:t('thNote')}))),
+      h('tbody', null, rows)))));
+  return {frag, chartHost, all, evs};
+}
+
+function renderLineChart(host, x, all, evs){
+  host.replaceChildren();
+  const W = Math.max(260, Math.floor(host.clientWidth || 352)), H = 214, m = {t:38, r:30, b:26, l:32};
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+  const dates = S.meas.map(r => toT(r.date)).concat(S.events.map(e => toT(e.date)), [toT(CONFIG.RETURN_DATE)]);
+  const t0 = Math.min(...dates) - 2 * DAY, t1 = Math.max(...dates) + 3 * DAY;
+  const X = (tt) => m.l + (tt - t0) / (t1 - t0) * pw, Y = (v) => m.t + ph - Math.min(v, CONFIG.INDEX_MAX) / CONFIG.INDEX_MAX * ph;
+  const svg = s('svg', {width:W, height:H, viewBox:`0 0 ${W} ${H}`, role:'img', 'aria-labelledby':'ct cd'});
+  s('title', {id:'ct'}, svg).textContent = t('chartH') + ' · ' + L_(x.name);
+  s('desc', {id:'cd'}, svg).textContent = t('chartDesc', {name:L_(x.name)});
+  for (const v of [0, 40, 80, 120]){
+    s('line', {x1:m.l, x2:m.l + pw, y1:Y(v), y2:Y(v), class:v ? 'grid' : 'axis'}, svg);
+    s('text', {x:m.l - 7, y:Y(v), dy:'0.32em', 'text-anchor':'end', class:'tick'}, svg).textContent = String(v);
+  }
+  const md = S.meas.map(r => r.date).sort((a, b) => toT(a) - toT(b)), firstD = md[0], lastD = md[md.length - 1];
+  const ticks = [toT(firstD)]; const fd = new Date(toT(firstD));
+  for (let d = Date.UTC(fd.getUTCFullYear(), fd.getUTCMonth() + 1, 1); d <= toT(lastD); d = Date.UTC(new Date(d).getUTCFullYear(), new Date(d).getUTCMonth() + 1, 1)) ticks.push(d);
+  ticks.push(toT(lastD));
+  let lastX = -999;
+  for (const tt of ticks){
+    const xx = X(tt); if (xx - lastX < 38) continue; lastX = xx;
+    const dd = new Date(tt); s('text', {x:xx, y:m.t + ph + 17, 'text-anchor':'middle', class:'tick'}, svg).textContent = (dd.getUTCMonth() + 1) + '/' + dd.getUTCDate();
+  }
+  /* labels sit to the right of their line, or to the left when the line is near the right edge */
+  const flag = (xx, y, txt) => { const left = xx > m.l + pw * 0.55; s('text', {x:left ? xx - 5 : xx + 5, y, 'text-anchor':left ? 'end' : 'start', class:'ref-label'}, svg).textContent = txt; };
+  const xr = X(toT(CONFIG.RETURN_DATE));
+  s('line', {x1:xr, x2:xr, y1:m.t - 30, y2:m.t + ph, class:'ref'}, svg);
+  flag(xr, m.t - 21, t('refReturn'));
+  for (const e of evs){
+    const xe = X(toT(e.date));
+    s('line', {x1:xe, x2:xe, y1:m.t - 14, y2:m.t + ph, class:'ref ev'}, svg);
+    flag(xe, m.t - 5, L_(e.label));
+  }
+  const runs = []; let run = [];
+  for (const r of all){ if (r.turbidity == null){ if (run.length) runs.push(run); run = []; } else run.push(r); }
+  if (run.length) runs.push(run);
+  for (const rn of runs){
+    if (rn.length < 2) continue;
+    let d = ''; rn.forEach((r, i) => { d += (i ? 'L' : 'M') + X(toT(r.date)).toFixed(1) + ',' + Y(r.turbidity).toFixed(1); });
+    s('path', {d:d + `L${X(toT(rn[rn.length - 1].date)).toFixed(1)},${Y(0)}L${X(toT(rn[0].date)).toFixed(1)},${Y(0)}Z`, class:'area'}, svg);
+    s('path', {d, class:'line'}, svg);
+  }
+  const xh = s('line', {x1:0, x2:0, y1:m.t, y2:m.t + ph, class:'xhair', visibility:'hidden'}, svg);
+  const showAt = (r, cx, cy) => { const xx = X(toT(r.date)); xh.setAttribute('x1', xx); xh.setAttribute('x2', xx); xh.setAttribute('visibility', 'visible'); showTip(readingTip(r), cx, cy); };
+  const hideAt = () => { xh.setAttribute('visibility', 'hidden'); hideTip(); };
+  const g0 = s('g', null, svg);
+  for (const r of all){
+    const xx = X(toT(r.date));
+    const g = s('g', {class:'pt', tabindex:0, role:'img'}, g0);
+    g.setAttribute('aria-label', fmtDate(r.date) + ', ' + (r.turbidity != null ? t('turb') + ' ' + r.turbidity : t('notMeasured')) + (r.rain ? ', ' + t('afterRain') : ''));
+    if (r.turbidity == null){
+      const y = Y(0) - 9;
+      s('path', {d:`M${xx - 4},${y - 4}L${xx + 4},${y + 4}M${xx + 4},${y - 4}L${xx - 4},${y + 4}`, class:'pt-miss'}, g);
+      s('circle', {cx:xx, cy:y, r:9, class:'focus-ring', fill:'none', stroke:'transparent'}, g);
+    } else {
+      const y = Y(r.turbidity);
+      if (S.round !== 'latest' && r.date === S.round) s('circle', {cx:xx, cy:y, r:9.5, class:'pt-sel'}, g);
+      if (r.rain) s('rect', {x:xx - 4.6, y:y - 4.6, width:9.2, height:9.2, transform:`rotate(45 ${xx} ${y})`, class:'pt-rain'}, g);
+      else s('circle', {cx:xx, cy:y, r:4.8, class:'pt-dry'}, g);
+      s('circle', {cx:xx, cy:y, r:10, class:'focus-ring', fill:'none', stroke:'transparent'}, g);
+    }
+    g.addEventListener('focus', () => { const b = g.getBoundingClientRect(); showAt(r, b.right, b.top); });
+    g.addEventListener('blur', hideAt);
+  }
+  const lastRun = runs[runs.length - 1], endR = lastRun ? lastRun[lastRun.length - 1] : null;
+  if (endR) s('text', {x:X(toT(endR.date)) + 9, y:Y(endR.turbidity), dy:'0.32em', class:'end-label'}, svg).textContent = String(endR.turbidity);
+  const hit = s('rect', {x:m.l, y:m.t - 6, width:pw, height:ph + 12, fill:'transparent', style:'cursor:crosshair'}, svg);
+  hit.addEventListener('pointermove', (e) => {
+    const px = e.clientX - svg.getBoundingClientRect().left; let best = null, bd = Infinity;
+    for (const r of all){ const d = Math.abs(X(toT(r.date)) - px); if (d < bd){ bd = d; best = r; } }
+    if (best) showAt(best, e.clientX, e.clientY);
+  });
+  hit.addEventListener('pointerleave', hideAt);
+  host.append(svg);
+}
+
+/* ---------- panel: add a reading ---------- */
+function todayISO(){ const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function panelForm(){
+  const v = S.formVals || {};
+  const isNew = S.formSource === '__new';
+  const sel = h('select', {id:'f-source'}, ...S.sources.map(x => h('option', {value:x.id, text:`${x.pending ? t('newSource') : x.id} · ${L_(x.name)}`})), h('option', {value:'__new', text:t('fNew')}));
+  sel.value = S.formSource;
+  const typeSel = h('select', {id:'n-type'}, ...TYPES.map(ty => h('option', {value:ty, text:t('s_' + ty)}))); typeSel.value = v.type || 'well';
+  const field = (label, input) => h('label', {class:'f'}, label, input);
+  const inp = (id, type, extra) => { const el = h('input', Object.assign({id, type, autocomplete:'off'}, extra || {})); if (v[id] != null) el.value = v[id]; return el; };
+  const date = inp('f-date', 'date', {min:'2025-01-01', max:'2035-12-31'}); if (!date.value) date.value = todayISO();
+  const rain = h('input', {id:'f-rain', type:'checkbox'}); rain.checked = !!v['f-rain'];
+  const form = h('form', {class:'stack', id:'addf', novalidate:true},
+    field(t('fSource'), sel),
+    h('div', {id:'new-box', class:'stack', style:'display:flex;flex-direction:column;gap:12px', hidden:!isNew},
+      h('div', {class:'two'}, field(t('fName'), inp('n-name', 'text', {maxlength:'40'})), field(t('fType'), typeSel)),
+      h('div', {class:'locbox'}, h('span', {html:IC.pin, style:'color:var(--blue);display:grid'}),
+        h('div', null, h('div', {class:'num', id:'n-loc', text:S.draft ? `${S.draft.lat.toFixed(5)}, ${S.draft.lng.toFixed(5)}` : '–'}), h('div', {class:'hint', id:'n-loc-hint', text:S.draft ? t('fLocMove') : t('fLocNone')})))
+    ),
+    h('div', {class:'two'}, field(t('fDate'), date), field(t('fBy'), inp('f-by', 'text', {maxlength:'40', placeholder:'Mika'}))),
+    h('div', {class:'two'}, field(t('fTurb'), inp('f-turb', 'number', {min:'0', max:'300', step:'1', inputmode:'decimal'})), field(t('fTemp'), inp('f-temp', 'number', {min:'5', max:'45', step:'0.1', inputmode:'decimal'}))),
+    h('label', {class:'check'}, rain, t('fRain')),
+    field(t('fNote'), inp('f-note', 'text', {maxlength:'200'})),
+    field(t('fEvent'), inp('f-event', 'text', {maxlength:'60', placeholder:t('fEventPh')})),
+    h('span', {class:'hint', text:t('fHint')}),
+    h('span', {class:'err', id:'f-err', role:'alert'}),
+    h('div', {class:'rowline'}, h('button', {class:'btn primary', type:'submit', text:t('save')}), h('button', {class:'btn', type:'button', 'data-act':'cancel', text:t('cancel')}))
+  );
+  return [h('div', {class:'hero'}, h('span', {text:t('formH')}), h('span', {html:IC.drop})), h('div', {class:'sec'}, form)];
+}
+function collectForm(){
+  if (!$('addf')) return;
+  const ids = ['n-name', 'f-date', 'f-by', 'f-turb', 'f-temp', 'f-note', 'f-event'];
+  S.formVals = {}; ids.forEach(id => { if ($(id)) S.formVals[id] = $(id).value; });
+  S.formVals['f-rain'] = $('f-rain') && $('f-rain').checked;
+  S.formVals.type = $('n-type') && $('n-type').value;
+}
+function openForm(id){
+  S.mode = 'form'; S.formSource = id || S.sel || S.sources[0]?.id; S.formVals = null; S.draft = null; S.list = false;
+  render();
+  if (S.formSource === '__new') $('pickbar').hidden = false;
+  const f = $('f-turb'); if (f && S.formSource !== '__new') f.focus({preventScroll:true});
+}
+
+function drawPanel(){
+  const x = src(S.sel), open = S.mode === 'form' || !!x;
+  $('panel').hidden = !open; document.body.classList.toggle('panel-open', open);
+  if (!open){ $('panel-body').replaceChildren(); return; }
+  if (S.mode === 'form'){
+    $('panel-body').replaceChildren(...panelForm());
+    $('f-source').onchange = (e) => {
+      S.formSource = e.target.value; const nw = S.formSource === '__new';
+      $('new-box').hidden = !nw; $('pickbar').hidden = !nw || !!S.draft;
+      if (!nw && draftPin){ map.removeLayer(draftPin); draftPin = null; }
+      $('map').classList.toggle('pick', nw);
+    };
+    $('n-type').onchange = drawDraft;
+  } else {
+    const {frag, chartHost, all, evs} = panelDetail(x);
+    $('panel-body').replaceChildren(...frag);
+    renderLineChart(chartHost, x, all, evs);
+  }
+}
+
+/* ---------- list & compare sheet ---------- */
+function rname(x){ const n = h('span', {class:'rname', html:typeIcon(x.type)}); n.append(h('span', {text:L_(x.name)})); return n; }
+function drawSheet(){
+  $('scrim').hidden = !S.list; if (!S.list) return;
+  $('sheet-h').textContent = t('list'); $('sheet-close').textContent = t('close');
+  $('copy-meas').textContent = t('copyMeas'); $('copy-src').textContent = t('copySrc');
+  const v = visible();
+  const measured = S.meas.filter(m => m.turbidity != null);
+  const afterDays = new Set(measured.filter(m => toT(m.date) > toT(CONFIG.RETURN_DATE)).map(m => m.date)).size;
+  const last = measured.slice().sort((a, b) => toT(b.date) - toT(a.date))[0];
+  const card1 = h('div', {class:'stat'}, h('h3', {text:t('sumH')}),
+    h('div', {class:'big num'},
+      h('div', null, h('b', {text:String(S.sources.length)}), h('span', {text:t('sumSrc')})),
+      h('div', null, h('b', {text:String(measured.length)}), h('span', {text:t('sumMeas')})),
+      h('div', null, h('b', {text:String(afterDays)}), h('span', {text:t('sumAfter')}))),
+    last ? h('span', {class:'hint', text:t('sumLast', {date:fmtDate(last.date), by:L_(last.by)})}) : null,
+    h('span', {class:'hint', text:t('place')}));
+  const pct = (val) => (Math.min(val, CONFIG.INDEX_MAX) / CONFIG.INDEX_MAX * 100).toFixed(2) + '%';
+  const bars = v.map(x => ({x, m:atRound(x.id)})).sort((a, b) => (b.m?.turbidity ?? -1) - (a.m?.turbidity ?? -1));
+  const bl = h('div', {class:'rows'});
+  for (const {x, m} of bars){
+    const val = m && m.turbidity != null ? m.turbidity : null;
+    const b = h('button', {type:'button', class:'brow', 'data-id':x.id, 'aria-label':`${L_(x.name)}, ${t('turb')} ${val == null ? t('notMeasured') : val}`}, rname(x),
+      h('span', {class:'btrack'}, val != null ? h('span', {class:'bar', style:`width:max(2px, ${(Math.min(val, CONFIG.INDEX_MAX) / CONFIG.INDEX_MAX * 78).toFixed(2)}%)`}) : null, h('span', {class:'bval' + (val == null ? ' none' : ''), text:val == null ? t('notMeasured') : String(val)})));
+    const tipN = () => [h('div', {style:'font-weight:500', text:L_(x.name)}), ...(m ? readingTip(m) : [h('div', {text:t('notMeasured')})])];
+    b.addEventListener('pointermove', (e) => showTip(tipN(), e.clientX, e.clientY));
+    b.addEventListener('pointerleave', hideTip); b.addEventListener('blur', hideTip);
+    bl.append(b);
+  }
+  const card2 = h('div', {class:'stat'}, h('h3', {text:t('barsH', {round:roundLabel()})}), v.length ? bl : h('span', {class:'hint', text:t('none')}), h('span', {class:'hint', text:t('barsNote')}));
+  const avg = (a) => a.length ? a.reduce((p, q) => p + q, 0) / a.length : null;
+  const dbs = v.map(x => { const ms = measOf(x.id).filter(m => m.turbidity != null); const dry = avg(ms.filter(m => !m.rain).map(m => m.turbidity)), wet = avg(ms.filter(m => m.rain).map(m => m.turbidity)); return {x, dry, wet, d:dry != null && wet != null ? wet - dry : null}; })
+    .sort((a, b) => (b.d ?? -999) - (a.d ?? -999));
+  const dl = h('div', {class:'rows'});
+  for (const r of dbs){
+    const tr = h('span', {class:'dtrack'});
+    if (r.dry != null && r.wet != null){ const lo = Math.min(r.dry, r.wet), hi = Math.max(r.dry, r.wet); tr.append(h('span', {class:'dline', style:`left:${pct(lo)};width:calc(${pct(hi)} - ${pct(lo)})`})); }
+    if (r.dry != null) tr.append(h('span', {class:'ddot dry', style:`left:${pct(r.dry)}`}));
+    if (r.wet != null) tr.append(h('span', {class:'ddot wet', style:`left:${pct(r.wet)}`}));
+    const dTxt = r.d == null ? '–' : (r.d >= 0 ? '+' : '−') + Math.abs(Math.round(r.d));
+    const b = h('button', {type:'button', class:'drow', 'data-id':r.x.id, 'aria-label':`${L_(r.x.name)}, ${t('dbDry')} ${r.dry == null ? '–' : r.dry.toFixed(1)}, ${t('dbWet')} ${r.wet == null ? '–' : r.wet.toFixed(1)}`}, rname(r.x), tr, h('span', {class:'ddelta', text:dTxt}));
+    const tipN = () => [h('div', {style:'font-weight:500', text:L_(r.x.name)}),
+      h('div', null, h('span', {class:'tk', style:'background:var(--series)'}), t('dbDry') + ' ', h('b', {text:r.dry == null ? '–' : r.dry.toFixed(1)})),
+      h('div', null, h('span', {class:'tk', style:'background:var(--rain)'}), t('dbWet') + ' ', h('b', {text:r.wet == null ? '–' : r.wet.toFixed(1)}))];
+    b.addEventListener('pointermove', (e) => showTip(tipN(), e.clientX, e.clientY));
+    b.addEventListener('pointerleave', hideTip); b.addEventListener('blur', hideTip);
+    dl.append(b);
+  }
+  const axis = h('div', {class:'daxis', 'aria-hidden':'true'}, h('span'), h('span', {class:'ticks'}, ...[0, 40, 80, 120].map(n => h('span', {style:`left:${pct(n)}`, text:String(n)}))), h('span'));
+  const card3 = h('div', {class:'stat'}, h('div', {class:'chart-head'}, h('h3', {text:t('dbH')}), h('div', {class:'key', 'aria-hidden':'true'}, h('span', null, h('i', {class:'k-dry'}), t('dbDry')), h('span', null, h('i', {class:'k-rain'}), t('dbWet')))), v.length ? dl : null, v.length ? axis : null, h('span', {class:'hint', text:t('dbNote')}));
+  $('stats').replaceChildren(card1, card2, card3);
+
+  const gap = (id) => { const ms = measOf(id).filter(m => m.turbidity != null); const dry = avg(ms.filter(m => !m.rain).map(m => m.turbidity)), wet = avg(ms.filter(m => m.rain).map(m => m.turbidity)); return dry != null && wet != null ? wet - dry : null; };
+  const cols = [['id', 'thNo', ''], ['name', 'thName', ''], ['type', 'thType', ''], ['val', 'thTurb', 'r'], ['temp', 'thTemp', 'r'], ['last', 'thLast', ''], ['gap', 'thGap', 'r']];
+  const key = (x) => { const m = atRound(x.id); return {id:x.id, name:L_(x.name), type:TYPES.indexOf(x.type), val:m?.turbidity ?? -1, temp:m?.temp ?? -1, last:latestOf(x.id)?.date || '', gap:gap(x.id) ?? -999}[S.sort.k]; };
+  const rows = v.slice().sort((a, b) => { const p = key(a), q = key(b); return (p < q ? -1 : p > q ? 1 : a.id.localeCompare(b.id)) * S.sort.dir; });
+  const arrow = (k) => S.sort.k === k ? (S.sort.dir > 0 ? ' ▲' : ' ▼') : '';
+  const thead = h('thead', null, h('tr', null, ...cols.map(([k, l, c]) => h('th', {class:c || null, 'aria-sort':S.sort.k === k ? (S.sort.dir > 0 ? 'ascending' : 'descending') : 'none'}, h('button', {type:'button', 'data-sort':k, text:t(l) + arrow(k)})))));
+  const tbody = h('tbody', null, rows.length ? rows.map(x => {
+    const m = atRound(x.id), lt = latestOf(x.id), g = gap(x.id);
+    const ty = h('span', {class:'tag', html:typeIcon(x.type)}); ty.append(t('s_' + x.type));
+    return h('tr', {'data-id':x.id, tabindex:'0'},
+      h('td', {class:'num', text:x.pending ? '–' : x.id}),
+      h('td', {class:'t'}, L_(x.name), h('span', {class:'sub', text:L_(x.desc)})),
+      h('td', null, ty),
+      h('td', {class:'r num', text:m && m.turbidity != null ? String(m.turbidity) : '–'}),
+      h('td', {class:'r num', text:m ? fmtTemp(m.temp) : '–'}),
+      h('td', {class:'num', text:lt ? fmtDate(lt.date) : '–'}),
+      h('td', {class:'r num', text:g == null ? '–' : (g >= 0 ? '+' : '−') + Math.abs(Math.round(g))}));
+  }) : h('tr', null, h('td', {colspan:'7', text:t('none')})));
+  $('table').replaceChildren(thead, tbody);
+}
+
+/* ---------- chrome ---------- */
+function drawChrome(){
+  document.documentElement.lang = S.lang; document.title = t('docTitle');
+  $('q').placeholder = t('search'); $('q').setAttribute('aria-label', t('search'));
+  $('open-list').textContent = t('list');
+  $('l-ko').setAttribute('aria-pressed', S.lang === 'ko'); $('l-en').setAttribute('aria-pressed', S.lang === 'en');
+  $('lang-group').setAttribute('aria-label', S.lang === 'ko' ? '언어' : 'Language');
+  $('add-l').textContent = t('add'); $('add').hidden = S.mode !== 'idle';
+  $('pickbar').textContent = t('fLocNone');
+  $('pickbar').hidden = !(S.mode === 'form' && S.formSource === '__new' && !S.draft);
+  $('panel-close').setAttribute('aria-label', t('close'));
+  $('layer').className = 'layerbtn ' + (S.sat ? 'road' : 'sat'); $('layer-l').textContent = S.sat ? t('road') : t('sat');
+  const time = S.at ? new Date(S.at).toLocaleString(S.lang === 'ko' ? 'ko-KR' : 'en-GB', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
+  const hasEx = S.sources.some(x => x.example), allEx = BASE.meas.length > 0 && BASE.meas.every(m => m.example);
+  let note = S.status === 'loading' ? t('noticeLoading') : S.status === 'fail' ? t('noticeFail') : S.status === 'cache' ? t('noticeCache', {time})
+    : allEx ? t('noticeExample') : t('noticeLive', {time}) + (hasEx ? t('withExample') : '');
+  if (Q.length) note += t('withQueue', {n:Q.length});
+  $('notice').textContent = note;
+  $('chips').setAttribute('aria-label', S.lang === 'ko' ? '수원 종류' : 'Source types');
+  $('chips').replaceChildren(...TYPES.map(ty => {
+    const b = h('button', {type:'button', class:'chip', 'data-type':ty, 'aria-pressed':String(S.types.has(ty)), html:typeIcon(ty)});
+    b.append(t('t_' + ty), h('span', {class:'n', text:String(S.sources.filter(x => x.type === ty).length)}));
+    return b;
+  }));
+  $('round-l').textContent = t('roundL');
+  const sel = $('round'); sel.replaceChildren(h('option', {value:'latest', text:t('latest')}), ...rounds().map(r => h('option', {value:r.date, text:fmtDate(r.date) + (r.rain ? ' · ' + t('afterRain') : '')})));
+  sel.value = S.round;
+  $('legend').replaceChildren(
+    h('div', {class:'lg1'}, h('b', {text:t('lgTitle')}), h('span', {class:'num', text:'0'}), h('span', {class:'bar', 'aria-hidden':'true'}), h('span', {class:'num', text:'100+'})),
+    h('div', {class:'lg2', text:t('lgNote')}));
+}
+function render(){ drawChrome(); drawPins(); drawPanel(); drawSheet(); }
+
+/* ---------- actions ---------- */
+function select(id){ S.sel = id; S.mode = 'idle'; S.draft = null; S.list = false; render(); reveal(src(id)); }
+function closePanel(){ S.sel = null; S.mode = 'idle'; S.draft = null; S.formVals = null; render(); }
+$('panel-close').onclick = closePanel;
+$('l-ko').onclick = () => { collectForm(); S.lang = 'ko'; render(); };
+$('l-en').onclick = () => { collectForm(); S.lang = 'en'; render(); };
+$('add').onclick = () => openForm(S.sel);
+$('open-list').onclick = () => { S.list = true; render(); $('sheet-close').focus(); };
+$('sheet-close').onclick = () => { S.list = false; render(); };
+$('scrim').addEventListener('click', (e) => { if (e.target === $('scrim')){ S.list = false; render(); } });
+$('round').onchange = (e) => { collectForm(); S.round = e.target.value; render(); };
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return; hideTip();
+  if (S.list){ S.list = false; render(); } else if (!$('results').hidden) $('results').hidden = true; else if (S.mode !== 'idle' || S.sel != null) closePanel();
+});
+$('layer').onclick = () => { S.sat = !S.sat; if (map){ map.removeLayer(S.sat ? layerRoad : layerSat); map.addLayer(S.sat ? layerSat : layerRoad); } drawChrome(); };
+$('chips').onclick = (e) => { const c = e.target.closest('[data-type]'); if (!c) return; const k = c.dataset.type; S.types.has(k) ? S.types.delete(k) : S.types.add(k); collectForm(); render(); };
+function search(){
+  const q = $('q').value.trim().toLowerCase(); $('q-clear').hidden = !q;
+  if (!q){ $('results').hidden = true; return; }
+  const hits = S.sources.filter(x => [x.id, L_(x.name), x.name.en || '', x.name.ko || '', L_(x.desc), t('s_' + x.type), T['s_' + x.type].ko, T['s_' + x.type].en].join(' ').toLowerCase().includes(q)).slice(0, 6);
+  $('results').replaceChildren(...(hits.length ? hits.map(x => {
+    const v = valueOf(x.id);
+    const b = h('button', {type:'button', 'data-id':x.id, html:pinSvg(x.type, v, 20)});
+    b.append(h('span', null, L_(x.name), h('span', {class:'sub', text:`${t('s_' + x.type)} · ${t('turb')} ${v == null ? '–' : v}`})));
+    return b;
+  }) : [h('div', {class:'empty', text:t('none')})]));
+  $('results').hidden = false;
+}
+$('q').addEventListener('input', search); $('q').addEventListener('focus', search);
+$('q-clear').onclick = () => { $('q').value = ''; search(); $('q').focus(); };
+$('results').onclick = (e) => { const b = e.target.closest('[data-id]'); if (!b) return; const x = src(b.dataset.id); $('results').hidden = true; S.types.add(x.type); select(x.id); reveal(x, 18); };
+$('panel-body').addEventListener('click', (e) => {
+  const a = e.target.closest('[data-act]'); if (!a) return;
+  const x = src(S.sel);
+  if (a.dataset.act === 'cancel') closePanel();
+  if (a.dataset.act === 'undo') undo(a.dataset.kind, a.dataset.id, a.dataset.tmp);
+  if (a.dataset.act === 'add') openForm(S.sel);
+  if (a.dataset.act === 'zoom' && x) reveal(x, 19);
+  if (a.dataset.act === 'copy' && x){ const str = x.lat.toFixed(5) + ', ' + x.lng.toFixed(5); try { navigator.clipboard.writeText(str).then(() => { $('copy-l').textContent = t('copied'); }, () => {}); } catch (_) {} }
+});
+$('panel-body').addEventListener('submit', (e) => {
+  e.preventDefault(); if (e.target.id !== 'addf') return;
+  const isNew = $('f-source').value === '__new';
+  const name = isNew ? $('n-name').value.trim() : '', date = $('f-date').value, by = $('f-by').value.trim();
+  const turbS = $('f-turb').value.trim(), tempS = $('f-temp').value.trim(), turb = Number(turbS), temp = Number(tempS);
+  const checks = [
+    [isNew && !name, 'eName', 'n-name'], [isNew && !S.draft, 'eLoc', null],
+    [!/^\d{4}-\d{2}-\d{2}$/.test(date), 'eDate', 'f-date'],
+    [turbS === '' || !Number.isFinite(turb) || turb < 0 || turb > 300, 'eTurb', 'f-turb'],
+    [tempS === '' || !Number.isFinite(temp) || temp < 5 || temp > 45, 'eTemp', 'f-temp'],
+    [!by, 'eBy', 'f-by']
+  ];
+  ['n-name', 'f-date', 'f-turb', 'f-temp', 'f-by'].forEach(id => $(id) && $(id).setAttribute('aria-invalid', 'false'));
+  const bad = checks.find(c => c[0]);
+  if (bad){
+    const er = $('f-err'); er.textContent = t(bad[1]); er.dataset.k = bad[1];
+    if (bad[2]){ $(bad[2]).setAttribute('aria-invalid', 'true'); $(bad[2]).focus(); }
+    return;
+  }
+  if (date < '2025-01-01' || date > '2035-12-31'){ const er = $('f-err'); er.textContent = t('eDate'); er.dataset.k = 'eDate'; $('f-date').setAttribute('aria-invalid', 'true'); $('f-date').focus(); return; }
+  let id = $('f-source').value; id = REMAP[id] || id;
+  if (isNew){
+    id = tmpId('N');
+    Q.push({t:'source', tmp:id, row:{kind:$('n-type').value, name, lat:S.draft.lat, lng:S.draft.lng}});
+    S.types.add($('n-type').value);
+  }
+  Q.push({t:'reading', tmp:tmpId('R'), src:id, row:{measured_on:date, turbidity:Math.round(turb), temp_c:Math.round(temp * 10) / 10, rained:$('f-rain').checked, measured_by:by, note:$('f-note').value.trim() || null}});
+  const ev = $('f-event').value.trim();
+  if (ev) Q.push({t:'event', tmp:tmpId('E'), src:id, row:{happened_on:date, label:ev}});
+  ver++; saveQ(); compose();
+  S.round = 'latest'; S.formVals = null; S.draft = null;
+  select(id);
+  flush(true);
+});
+$('table').addEventListener('click', (e) => {
+  const sb = e.target.closest('[data-sort]');
+  if (sb){ const k = sb.dataset.sort; S.sort = S.sort.k === k ? {k, dir:-S.sort.dir} : {k, dir:1}; drawSheet(); return; }
+  const r = e.target.closest('tr[data-id]'); if (r){ select(r.dataset.id); reveal(src(r.dataset.id), 17); }
+});
+$('table').addEventListener('keydown', (e) => { if (e.key === 'Enter'){ const r = e.target.closest('tr[data-id]'); if (r && e.target === r) r.click(); } });
+$('stats').addEventListener('click', (e) => { const b = e.target.closest('[data-id]'); if (!b) return; hideTip(); select(b.dataset.id); reveal(src(b.dataset.id), 17); });
+
+/* ---------- CSV for the spreadsheet ---------- */
+const cell = (v) => { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+const measCSV = () => [['source_id','date','turbidity_index','temp_c','rain_24h','measured_by','note'],
+  ...S.meas.slice().sort((a, b) => toT(a.date) - toT(b.date) || a.source.localeCompare(b.source)).map(m => [m.source, m.date, m.turbidity ?? '', m.temp ?? '', m.rain ? 'yes' : 'no', L_(m.by), m.note ? L_(m.note) : ''])].map(r => r.map(cell).join(',')).join('\n');
+const srcCSV = () => [['id','type','lat','lng','name','description'], ...S.sources.map(x => [x.id, x.type, x.lat, x.lng, L_(x.name), L_(x.desc)])].map(r => r.map(cell).join(',')).join('\n');
+function copyText(text){
+  const msg = $('copy-msg'), fb = $('copy-fb');
+  const fail = () => { msg.textContent = t('copyFail'); fb.value = text; fb.hidden = false; fb.focus(); fb.select(); };
+  try { if (!navigator.clipboard) return fail(); navigator.clipboard.writeText(text).then(() => { msg.textContent = t('copyOk'); fb.hidden = true; }, fail); } catch (_) { fail(); }
+}
+$('copy-meas').onclick = () => copyText(measCSV());
+$('copy-src').onclick = () => copyText(srcCSV());
+
+/* ---------- the shared database ---------- */
+/* Anyone can add rows, so nothing read from the database (or from this browser's storage) is trusted:
+   every value is checked before it reaches the screen, and text is only ever set as text. */
+const HEX64 = /^[0-9a-f]{64}$/;
+const isISO = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+const str = (v, n) => typeof v === 'string' ? v.trim().slice(0, n) : '';
+const both = (ko, en) => en ? {ko:ko || en, en} : ko;
+const owner = (v) => typeof v === 'string' && HEX64.test(v) ? v : null;
+const when = (v) => { const n = Date.parse(v); return Number.isFinite(n) ? n : 0; };
+function cleanSource(r){
+  if (!r || !Number.isInteger(r.id) || !TYPES.includes(r.kind)) return null;
+  const lat = Number(r.lat), lng = Number(r.lng), name = str(r.name, 60);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || !name) return null;
+  return {id:'S' + r.id, db:r.id, type:r.kind, lat, lng, name:both(name, str(r.name_en, 60)), desc:both(str(r.description, 200), str(r.description_en, 200)),
+    problemId:Number.isInteger(r.problem_id) ? r.problem_id : null, example:r.is_example === true, owner:owner(r.owner_hash), at:when(r.created_at)};
+}
+function cleanReading(r){
+  if (!r || !Number.isInteger(r.id) || !Number.isInteger(r.source_id) || !isISO(r.measured_on)) return null;
+  const tb = r.turbidity == null ? null : Number(r.turbidity), tc = r.temp_c == null ? null : Number(r.temp_c);
+  if (tb != null && !(Number.isInteger(tb) && tb >= 0 && tb <= 300)) return null;
+  if (tc != null && !(Number.isFinite(tc) && tc >= 0 && tc <= 50)) return null;
+  const note = both(str(r.note, 200), str(r.note_en, 200));
+  return {db:r.id, source:'S' + r.source_id, date:r.measured_on, turbidity:tb, temp:tc, rain:r.rained === true, by:str(r.measured_by, 40), note:note || null,
+    example:r.is_example === true, owner:owner(r.owner_hash), at:when(r.created_at)};
+}
+function cleanEvent(r){
+  if (!r || !Number.isInteger(r.id) || !Number.isInteger(r.source_id) || !isISO(r.happened_on)) return null;
+  const label = str(r.label, 60); if (!label) return null;
+  return {db:r.id, source:'S' + r.source_id, date:r.happened_on, label:both(label, str(r.label_en, 60)), example:r.is_example === true, owner:owner(r.owner_hash), at:when(r.created_at)};
+}
+function cleanTitle(o){
+  if (typeof o === 'string') return o.slice(0, 120);
+  if (!o || typeof o !== 'object') return '';
+  return both(str(o.ko, 120), str(o.en, 120));
+}
+function build(raw){
+  const sources = (raw.a || []).map(cleanSource).filter(Boolean), ids = new Set(sources.map(x => x.id));
+  const probs = {};
+  (raw.p || []).forEach(p => { if (p && Number.isInteger(p.id) && p.del !== true) probs[p.id] = {no:String(p.id).padStart(3, '0'), title:cleanTitle(p.title), pub:p.pub === true}; });
+  sources.forEach(x => { if (probs[x.problemId]) x.problem = probs[x.problemId]; });
+  return {sources, meas:(raw.b || []).map(cleanReading).filter(m => m && ids.has(m.source)), events:(raw.c || []).map(cleanEvent).filter(e => e && ids.has(e.source))};
+}
+async function api(path, opt = {}){
+  const r = await fetch(CONFIG.DB_URL + path, {...opt, cache:'no-store', headers:{apikey:CONFIG.DB_KEY, 'Content-Type':'application/json', ...(opt.headers || {})}});
+  if (!r.ok){ const err = new Error('db ' + r.status); err.status = r.status; throw err; }
+  return r.status === 204 ? null : r.json().catch(() => null);
+}
+async function apiAll(path){
+  const out = [], page = 1000;
+  for (let off = 0; ; off += page){
+    const rows = await api(`${path}&limit=${page}&offset=${off}`);
+    if (!Array.isArray(rows)) break;
+    out.push(...rows); if (rows.length < page) break;
+  }
+  return out;
+}
+async function pull(){
+  const [a, b, c] = await Promise.all([
+    apiAll('/water_sources?select=id,kind,name,name_en,description,description_en,lat,lng,problem_id,is_example,owner_hash,created_at&order=id'),
+    apiAll('/water_readings?select=id,source_id,measured_on,turbidity,temp_c,rained,measured_by,note,note_en,is_example,owner_hash,created_at&order=measured_on,id'),
+    apiAll('/water_events?select=id,source_id,happened_on,label,label_en,is_example,owner_hash,created_at&order=happened_on,id')]);
+  const pids = [...new Set(a.map(r => r && r.problem_id).filter(Number.isInteger))];
+  let p = [];
+  if (pids.length){ try { p = await api('/problems?select=id,title:data->title,pub:data->pub,del:data->del&id=in.(' + pids.join(',') + ')') || []; } catch (_) {} }
+  return {a, b, c, p};
+}
+
+/* New rows wait in a queue kept in this browser. They are sent at once, or when the connection comes back.
+   Each device keeps a random secret (TOKEN) and sends only its SHA-256 (MINE) with every row,
+   so it can prove later that a row is its own and remove it within 24 hours. */
+let BASE = {sources:[], meas:[], events:[]}, Q = [], REMAP = {}, TOKEN = '', MINE = null;
+let ver = 0, sig = '', pulling = false, flushing = false, fitted = false;
+const tmpId = (k) => k + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const fin = (v, lo, hi) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+function validOp(o){
+  if (!o || typeof o.tmp !== 'string' || !o.row || typeof o.row !== 'object') return false;
+  const r = o.row;
+  if (o.t === 'source') return TYPES.includes(r.kind) && !!str(r.name, 60) && fin(r.lat, -90, 90) && fin(r.lng, -180, 180);
+  if (typeof o.src !== 'string') return false;
+  if (o.t === 'reading') return isISO(r.measured_on) && Number.isInteger(r.turbidity) && fin(r.turbidity, 0, 300) && fin(r.temp_c, 0, 50) && typeof r.rained === 'boolean' && typeof r.measured_by === 'string' && (r.note == null || typeof r.note === 'string');
+  if (o.t === 'event') return isISO(r.happened_on) && !!str(r.label, 60);
+  return false;
+}
+const saveQ = () => { try { localStorage.setItem(CONFIG.QUEUE_KEY, JSON.stringify(Q)); } catch (_) {} };
+function compose(){
+  const sources = BASE.sources.slice(), meas = BASE.meas.slice(), events = BASE.events.slice(), known = new Set(sources.map(x => x.id));
+  for (const o of Q){
+    const sid = REMAP[o.src] || o.src, r = o.row;
+    if (o.t === 'source'){ sources.push({id:o.tmp, tmp:o.tmp, type:r.kind, lat:r.lat, lng:r.lng, name:str(r.name, 60), desc:'', pending:true}); known.add(o.tmp); }
+    else if (o.t === 'reading' && known.has(sid)) meas.push({tmp:o.tmp, source:sid, date:r.measured_on, turbidity:r.turbidity, temp:r.temp_c, rain:r.rained, by:str(r.measured_by, 40), note:r.note ? str(r.note, 200) : null, pending:true});
+    else if (o.t === 'event' && known.has(sid)) events.push({tmp:o.tmp, source:sid, date:r.happened_on, label:str(r.label, 60), pending:true});
+  }
+  S.sources = sources; S.meas = meas; S.events = events;
+  if (S.sel && !src(S.sel)) S.sel = null;
+}
+const canUndo = (it) => !!it && (it.pending || (!!MINE && it.owner === MINE && Date.now() - it.at < CONFIG.UNDO_MS - 60000));
+function mineTag(kind, it){
+  if (it.pending) return h('span', {class:'pend'}, t('tagPending'), h('button', {type:'button', class:'linkbtn', 'data-act':'undo', 'data-kind':kind, 'data-tmp':it.tmp, text:t('cancel')}));
+  if (canUndo(it)) return h('button', {type:'button', class:'linkbtn', 'data-act':'undo', 'data-kind':kind, 'data-id':it.db, text:t('undo')});
+  return null;
+}
+/* Redraw everything except a form someone is typing into. */
+function softRender(){
+  const pb = $('panel-body'), y = pb.scrollTop;
+  drawChrome(); drawPins(); drawSheet();
+  if (S.mode !== 'form'){ drawPanel(); pb.scrollTop = y; }
+}
+/* A refusal from the database (bad value, source gone) can never succeed, so that row is dropped.
+   Anything else (no connection, server busy) is kept and tried again later. */
+const offlineErr = (e) => !e.status || [401, 403, 408, 429].includes(e.status) || e.status >= 500;
+function adopt(kind, row, tmp){
+  if (kind === 'source'){
+    const x = cleanSource(row); if (!x) return;
+    BASE.sources.push(x); REMAP[tmp] = x.id;
+    Q.forEach(o => { if (o.src === tmp) o.src = x.id; });
+    if (S.sel === tmp) S.sel = x.id;
+    if (S.formSource === tmp) S.formSource = x.id;
+  } else if (kind === 'reading'){ const m = cleanReading(row); if (m) BASE.meas.push(m); }
+  else { const e = cleanEvent(row); if (e) BASE.events.push(e); }
+}
+async function flush(announce){
+  if (flushing) return;
+  flushing = true; let refused = false;
+  while (Q.length){
+    const o = Q[0], sid = REMAP[o.src] || o.src;
+    try {
+      if (o.t !== 'source' && !/^S\d+$/.test(sid)) throw Object.assign(new Error('no source'), {status:409});
+      const table = o.t === 'source' ? 'water_sources' : o.t === 'reading' ? 'water_readings' : 'water_events';
+      const body = {...o.row};
+      if (o.t !== 'source') body.source_id = Number(sid.slice(1));
+      if (MINE) body.owner_hash = MINE;
+      const res = await api('/' + table, {method:'POST', headers:{Prefer:'return=representation'}, body:JSON.stringify(body)});
+      Q.shift(); ver++;
+      if (Array.isArray(res) && res[0]) adopt(o.t, res[0], o.tmp);
+      saveQ();
+    } catch (e){
+      if (offlineErr(e)) break;
+      Q.shift(); ver++; refused = true;
+      if (o.t === 'source') Q = Q.filter(x => x.src !== o.tmp);
+      saveQ();
+    }
+  }
+  flushing = false;
+  compose(); softRender();
+  if (refused) toast(t('rejected'));
+  else if (announce) toast(Q.length ? t('savedLocal') : t('saved'));
+  if (!Q.length) refresh();
+}
+function firstLook(){
+  if (fitted || !S.sources.length) return;
+  fitted = true;
+  if (window.innerWidth > 900 && !S.sel && src('S8')) S.sel = 'S8';
+  render(); fitAll();
+}
+async function refresh(){
+  if (Q.length){ if (!flushing) flush(false); return; }
+  if (flushing || pulling || document.hidden) return;
+  pulling = true; const v = ver; let raw;
+  try { raw = await pull(); }
+  catch (_) {
+    pulling = false;
+    const st = BASE.sources.length ? 'cache' : 'fail';
+    if (S.status !== st){ S.status = st; drawChrome(); }
+    return;
+  }
+  pulling = false;
+  if (v !== ver || Q.length){ setTimeout(refresh, 300); return; }   /* something changed here while downloading: ask again */
+  S.status = 'live'; S.at = Date.now();
+  try { localStorage.setItem(CONFIG.CACHE_KEY, JSON.stringify({raw, at:S.at})); } catch (_) {}
+  const n = JSON.stringify(raw);
+  if (n !== sig){ sig = n; BASE = build(raw); compose(); softRender(); firstLook(); }
+  else drawChrome();
+}
+async function undo(kind, id, tmp){
+  if (!['source', 'reading', 'event'].includes(kind) || !confirm(t('undoQ'))) return;
+  if (tmp){
+    Q = Q.filter(o => o.tmp !== tmp && !(kind === 'source' && o.src === tmp)); ver++; saveQ(); compose();
+    if (S.sel === tmp) S.sel = null;
+    render(); toast(t('undone')); return;
+  }
+  const n = Number(id); if (!Number.isInteger(n)) return;
+  try {
+    const ok = await api('/rpc/water_undo', {method:'POST', body:JSON.stringify({p_kind:kind, p_id:n, p_token:TOKEN})});
+    if (ok !== true){ toast(t('undoFail')); return; }
+    ver++;
+    if (kind === 'reading') BASE.meas = BASE.meas.filter(m => m.db !== n);
+    if (kind === 'event') BASE.events = BASE.events.filter(e => e.db !== n);
+    if (kind === 'source'){ const sid = 'S' + n; BASE.sources = BASE.sources.filter(x => x.id !== sid); BASE.meas = BASE.meas.filter(m => m.source !== sid); BASE.events = BASE.events.filter(e => e.source !== sid); }
+    compose(); render(); toast(t('undone')); refresh();
+  } catch (e){ toast(offlineErr(e) ? t('undoOffline') : t('undoFail')); }
+}
+
+/* ---------- start ---------- */
+try {
+  const c = JSON.parse(localStorage.getItem(CONFIG.CACHE_KEY) || 'null');
+  if (c && c.raw && typeof c.raw === 'object'){ BASE = build(c.raw); S.status = 'cache'; S.at = Number(c.at) || null; }
+} catch (_) {}
+try { const q = JSON.parse(localStorage.getItem(CONFIG.QUEUE_KEY) || '[]'); if (Array.isArray(q)) Q = q.filter(validOp); } catch (_) {}
+try { TOKEN = localStorage.getItem(CONFIG.TOKEN_KEY) || ''; } catch (_) {}
+if (!/^[0-9a-f]{32}$/.test(TOKEN)){
+  const a = new Uint8Array(16); crypto.getRandomValues(a); TOKEN = [...a].map(b => b.toString(16).padStart(2, '0')).join('');
+  try { localStorage.setItem(CONFIG.TOKEN_KEY, TOKEN); } catch (_) {}
+}
+compose();
+if (window.L) initMap(); else $('map').replaceChildren(h('div', {class:'offline', text:T.offline.ko + ' / ' + T.offline.en}));
+render();
+firstLook();
+let rz = null;
+window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (map) map.invalidateSize(); if (S.mode === 'idle' && S.sel) drawPanel(); }, 150); });
+(async () => {
+  try { if (crypto.subtle){ const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(TOKEN)); MINE = [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join(''); } } catch (_) {}
+  softRender();
+  refresh();
+})();
+setInterval(refresh, CONFIG.POLL_MS);
+window.addEventListener('online', refresh);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+})();
+</script>
+</body>
+</html>
